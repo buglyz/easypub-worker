@@ -1,0 +1,9 @@
+bin/
+*.exe
+*.epub
+*.mobi
+testdata/*.epub
+testdata/*.mobi
+.idea/
+.vscode/
+*.log

@@ -1,0 +1,43 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<EasyPubConfig>
+  <eReaders>
+   <!--   
+	 自定义阅读器字体路径
+	 name: 阅读器名称
+	 font：字体路径，允许多个并列
+	 -->
+    <model>
+	  <name>Nook(和其它Android设备)</name>
+	  <font>res:///system/fonts/DroidSansFallback.ttf</font>
+	  <font>res:///ebook/fonts/../../system/fonts/DroidSansFallback.ttf</font>
+    </model>
+    <model>
+	  <name>SONY PRS-505默认</name>
+	  <font>res:///Data/FONT/tt0003m_.ttf</font>
+    </model>
+	<model>
+	  <name>老牛字体样式(zw.ttf)</name>
+	  <font>res:///opt/sony/ebook/FONT/zw.ttf</font>
+	  <font>res:///Data/FONT/zw.ttf</font>
+	  <font>res:///opt/sony/ebook/FONT/tt0011m_.ttf</font>
+	  <font>res:///ebook/fonts/../../mnt/sdcard/fonts/zw.ttf</font>
+	  <font>res:///ebook/fonts/../../mnt/extsd/fonts/zw.ttf</font>
+	  <font>res:///ebook/fonts/zw.ttf</font>
+	  <font>res:///ebook/fonts/DroidSansFallback.ttf</font>
+	  <font>res:///fonts/ttf/zw.ttf</font>
+	  <font>res:///../../media/mmcblk0p1/fonts/zw.ttf</font>
+	  <font>res:///DK_System/system/font/zw.ttf</font>
+	  <font>res:///abook/fonts/zw.ttf</font>
+	  <font>res:///system/fonts/zw.ttf</font>
+	  <font>res:///system/media/sdcard/fonts/zw.ttf</font>
+	  <font>res:///media/fonts/zw.ttf</font>
+	  <font>res:///sdcard/fonts/zw.ttf</font>
+	  <font>res:///mnt/MOVIFAT/font/zw.ttf</font>
+	  <font>res:///media/flash/fonts/zw.ttf</font>
+	  <font>res:///media/sd/fonts/zw.ttf</font>
+	  <font>res:///system/fonts/DroidSansFallback.ttf</font>
+	  <font>res:///ebook/fonts/../../system/fonts/DroidSansFallback.ttf</font>
+	  <font>res:///opt/onyx/arm/lib/fonts/AdobeHeitiStd-Regular.otf</font>
+	</model>
+  </eReaders>
+</EasyPubConfig>
