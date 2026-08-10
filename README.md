@@ -1,5 +1,8 @@
 # go-easypub
 
+![CI](https://github.com/buglyz/easypub/actions/workflows/ci.yml/badge.svg)
+![Release](https://github.com/buglyz/easypub/actions/workflows/release.yml/badge.svg)
+
 将 TXT 转换为 EPUB 的工具，用 Go 重写自 [EasyPub](http://sourceforge.net/projects/easypub/)（v1.50）。
 目标：与原工具生成的 EPUB 在结构与样式上**字节级对齐**，支持 Linux/Windows 跨平台、零运行时依赖、单文件分发，并自带 WebUI。
 
@@ -29,9 +32,23 @@
 | Windows | amd64 | ✅ |
 | macOS | amd64/arm64 | ✅（同 `make` 命令，未在 Makefile 列出但可手动 `GOOS=darwin go build`） |
 
+| macOS | amd64/arm64 | ✅（Release 工作流一并构建） |
+
 Android 不在本项目支持范围。
 
 ## 安装
+
+**方式一：直接下载预编译二进制**
+
+到 [Releases](https://github.com/buglyz/easypub/releases) 下载对应平台的二进制：
+- `easypub-linux-amd64` / `easypub-linux-arm64`
+- `easypub-windows-amd64.exe`
+- `easypub-darwin-amd64` / `easypub-darwin-arm64`
+- `checksums-sha256.txt` 校验和
+
+每个 Release 的二进制由 GitHub Actions 在打 `v*` tag 时自动构建并发布。
+
+**方式二：从源码构建**
 
 ```bash
 go build -o easypub ./cmd/easypub
@@ -164,3 +181,16 @@ make test    # 或 go test ./...
 ```
 
 覆盖：分章（多正则、中阿数字、空行、加空行、缩进、HTML 转义），CSS 模板参数，EPUB 结构与 zip 方法，BOM 头，编码探测（UTF-8/GBK/UTF-16LE），config 往返，converter 集成，WebUI（HTTP 上传/转换/下载/路径穿越防护）。
+
+## 持续集成
+
+- **CI**（`.github/workflows/ci.yml`）：每次 push 到 `master` 或 PR 触发，跑 `go vet` + `go test` + 三平台构建冒烟。
+- **Release**（`.github/workflows/release.yml`）：打 `v*` tag 触发，跑测试后构建 linux/windows/darwin 五个二进制 + sha256 校验和，自动创建 GitHub Release 并上传。
+
+发版示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+# Actions 跑完即可在 Releases 页看到产物
+```
