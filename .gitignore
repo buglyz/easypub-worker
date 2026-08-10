@@ -1,9 +1,11 @@
 bin/
+dist/
 *.exe
 *.epub
 *.mobi
 testdata/*.epub
 testdata/*.mobi
+.easypub-output/
 .idea/
 .vscode/
 *.log

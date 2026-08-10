@@ -1,0 +1,202 @@
+package webui
+
+import (
+	"bytes"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+)
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	s, err := New(Config{Addr: "127.0.0.1:0", WorkDir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+// buildMultipart 构造 multipart 请求体(字段+单个文件),返回 body 与对应的
+// Content-Type(boundary 不同,所以需要回传)。
+func buildMultipart(t *testing.T, fields map[string]string, fileField, fileName, content string) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatalf("WriteField: %v", err)
+		}
+	}
+	fw, err := w.CreateFormFile(fileField, fileName)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	ct := w.FormDataContentType()
+	w.Close()
+	return &buf, ct
+}
+
+func TestIndex_ServesHTML(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "EasyPub") {
+		t.Errorf("页面不含 EasyPub")
+	}
+}
+
+func TestIndex_ServesStaticCSS(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "dropzone") {
+		t.Errorf("style.css 内容异常")
+	}
+}
+
+func TestIndex_NotFound(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d 期望 404", rec.Code)
+	}
+}
+
+func TestDetect_ReturnsChapterTitles(t *testing.T) {
+	s := newTestServer(t)
+	content := "序\n　　书名：测试\n第1章 开端\n　　段落。\n"
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("splitMode", "0")
+	_ = w.WriteField("fullReg", "")
+	_ = w.WriteField("removeBlank", "true")
+	_ = w.WriteField("autoMark", "true")
+	fw, _ := w.CreateFormFile("file", "book.txt")
+	_, _ = fw.Write([]byte(content))
+	w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/detect", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleDetect(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "第1章 开端") {
+		t.Errorf("response 缺章节: %s", rec.Body.String())
+	}
+}
+
+func TestConvert_ProducesEPUB(t *testing.T) {
+	s := newTestServer(t)
+	content := "序\n　　书名：测试书\n第1章 开端\n　　段落一。\n第2章 发展\n　　段落二。\n"
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("splitMode", "0")
+	_ = w.WriteField("fullReg", "")
+	_ = w.WriteField("removeBlank", "true")
+	_ = w.WriteField("autoMark", "true")
+	_ = w.WriteField("title", "测试书")
+	_ = w.WriteField("author", "作者")
+	_ = w.WriteField("lineHeight", "120")
+	_ = w.WriteField("fontSize", "100")
+	_ = w.WriteField("marginTop", "5")
+	_ = w.WriteField("textAlign", "0")
+	fw, _ := w.CreateFormFile("file", "book.txt")
+	_, _ = fw.Write([]byte(content))
+	w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/convert", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleConvert(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "download") {
+		t.Fatalf("response 缺 download: %s", body)
+	}
+	// 输出目录应存在 epub。
+	files, _ := os.ReadDir(s.outputs)
+	epubCount := 0
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".epub") {
+			epubCount++
+		}
+	}
+	if epubCount == 0 {
+		t.Fatalf("输出目录无 epub: %v", files)
+	}
+}
+
+func TestConvert_DownloadRoundTrip(t *testing.T) {
+	s := newTestServer(t)
+	content := "第1章 开端\n　　正文。\n"
+	body, ct := buildMultipart(t, map[string]string{
+		"splitMode": "0", "fullReg": "", "removeBlank": "true", "autoMark": "true",
+		"title": "书", "author": "a", "lineHeight": "120", "fontSize": "100", "marginTop": "5", "textAlign": "0",
+	}, "file", "book.txt", content)
+	req := httptest.NewRequest(http.MethodPost, "/api/convert", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	s.handleConvert(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("convert status=%d", rec.Code)
+	}
+	// 提取 epub 文件名,走 download handler。
+	files, _ := os.ReadDir(s.outputs)
+	var epubName string
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".epub") {
+			epubName = f.Name()
+			break
+		}
+	}
+	if epubName == "" {
+		t.Fatal("无 epub 产物")
+	}
+	dreq := httptest.NewRequest(http.MethodGet, "/api/download/"+epubName, nil)
+	drec := httptest.NewRecorder()
+	s.handleDownload(drec, dreq)
+	if drec.Code != http.StatusOK {
+		t.Fatalf("download status=%d", drec.Code)
+	}
+	if drec.Body.Len() == 0 {
+		t.Fatal("下载内容为空")
+	}
+	// 校验是 zip(mimetype 起始)。
+	peek := drec.Body.Bytes()
+	if !bytes.Contains(peek, []byte("PK\x03\x04")) {
+		t.Error("不是有效的 zip 文件")
+	}
+}
+
+func TestDownload_PathTraversalBlocked(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/download/..%2F..%2Fetc%2Fpasswd", nil)
+	rec := httptest.NewRecorder()
+	s.handleDownload(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("跨目录攻击应返回 400,得到 %d", rec.Code)
+	}
+}

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyPub - TXT 转 EPUB</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>EasyPub</h1>
+  <span class="subtitle">TXT 转 EPUB 网页版</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>① 选择 TXT 文件</h2>
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="file" accept=".txt,.utf8,.gbk,.utf-8" hidden>
+      <p>点击选择或拖拽 TXT 文件到此处</p>
+      <p class="fileinfo" id="fileinfo"></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>② 图书信息</h2>
+    <div class="form-row">
+      <label>书名</label>
+      <input type="text" id="title" placeholder="留空自动从 TXT 推断">
+    </div>
+    <div class="form-row">
+      <label>作者</label>
+      <input type="text" id="author" placeholder="可选">
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>③ 分章设置 <button class="btn small" id="detectBtn" disabled>识别章节</button></h2>
+    <div class="form-row">
+      <label>识别方式</label>
+      <select id="splitMode">
+        <option value="0">自动识别(默认)</option>
+        <option value="1">按字数分章</option>
+        <option value="2">整本一章</option>
+      </select>
+    </div>
+    <div class="form-row" id="fullregRow">
+      <label>自定义正则</label>
+      <input type="text" id="fullReg" placeholder="如 ^\s*第\s*[0-9]+\s*章">
+    </div>
+    <div class="form-row">
+      <label class="checkbox"><input type="checkbox" id="removeBlank" checked> 删除空行</label>
+    </div>
+    <div class="preview" id="preview"></div>
+  </section>
+
+  <section class="card">
+    <h2>④ 排版参数</h2>
+    <div class="form-row">
+      <label>行高(%)</label>
+      <input type="number" id="lineHeight" value="120" min="100" max="300">
+    </div>
+    <div class="form-row">
+      <label>字号(%)</label>
+      <input type="number" id="fontSize" value="100" min="50" max="300">
+    </div>
+    <div class="form-row">
+      <label>段前距(px)</label>
+      <input type="number" id="marginTop" value="5" min="0" max="50">
+    </div>
+    <div class="form-row">
+      <label>对齐</label>
+      <select id="textAlign">
+        <option value="0">两端对齐</option>
+        <option value="1">左对齐</option>
+        <option value="2">居中</option>
+        <option value="3">右对齐</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="card">
+    <button class="btn primary" id="convertBtn" disabled>⑤ 开始转换</button>
+    <div class="progress" id="progress"></div>
+    <div class="result" id="result"></div>
+  </section>
+</main>
+
+<footer>go-easypub · WebUI</footer>
+<script src="/app.js"></script>
+</body>
+</html>

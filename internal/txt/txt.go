@@ -256,6 +256,15 @@ func ReadFile(path string) (string, error) {
 	return s, err
 }
 
+// ReadFileEncoded 读取文件并自动探测编码，额外返回编码名称。
+func ReadFileEncoded(path string) (text, enc string, err error) {
+	b, err := readFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	return util.DetectAndDecode(b)
+}
+
 // ScanLines 按行扫描大文件，避免一次性读入内存。
 // 当前实现仍走 ReadFile，因为 EasyPub 单 TXT 通常 < 10MB。
 func ScanLines(path string) ([]string, error) {
