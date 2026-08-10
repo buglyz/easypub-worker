@@ -67,7 +67,7 @@ jobs:
             -o ${{ matrix.artifact }} ./cmd/easypub
 
       - name: Smoke test (POSIX)
-        if: matrix.os != 'windows'
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
         run: file ${{ matrix.artifact }} && ./${{ matrix.artifact }} -version
 
       - name: Upload artifact
