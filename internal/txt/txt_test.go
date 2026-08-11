@@ -1,6 +1,7 @@
 package txt
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -239,6 +240,98 @@ func TestParse_AutoMark_DoesNotCutBodySentences(t *testing.T) {
 	}
 	if len(chs) != 1 {
 		t.Fatalf("正文句子不应被切章,期望 1 章,得到 %d titles=%v", len(chs), chapterTitles(chs))
+	}
+}
+
+func TestDefaultRegExps_MatchCommonTitles(t *testing.T) {
+	pats := make([]*regexp.Regexp, 0, len(DefaultRegExps))
+	for _, s := range DefaultRegExps {
+		p, err := regexp.Compile(s)
+		if err != nil {
+			t.Fatalf("Compile %q: %v", s, err)
+		}
+		pats = append(pats, p)
+	}
+	match := func(line string) bool {
+		trim := strings.TrimSpace(line)
+		for _, p := range pats {
+			if p.MatchString(line) || p.MatchString(trim) {
+				return true
+			}
+		}
+		return false
+	}
+
+	positives := []string{
+		"序", "序言", "序章", "序曲", "序1", "楔子", "引子", "前言", "自序", "代序",
+		"后记", "尾声", "终章", "终卷", "番外", "番外篇", "外传", "特别篇",
+		"简介", "内容简介", "文案", "作者简介", "编辑推荐", "正文", "附录",
+		"上部", "中部", "下部", "上篇", "下篇", "第一部", "第三部",
+		"第1章", "第1章 开端", "第1章开端", "第一章", "第一百零八章 大结局",
+		"第01章", "【第1章】开端", "（第一章）初见", "第1 章 标题",
+		"第1话", "第12话 标题", "第1篇", "第壹章",
+		"第1回", "第一回 风云起", "第3节", "第2部 远征", "第5集", "第2卷",
+		"第一幕", "第3讲", "第1部分", "第2部分 开始",
+		"卷1", "卷二", "卷 3 远行", "章之一", "卷之一", "节之三",
+		"Chapter 1", "Chapter 12: The End", "CHAPTER I", "Ch. 3", "Ch 4 Title",
+		"Part 1", "Part II", "Volume 1", "Vol. 2", "Vol 3 Prologue",
+		"Prologue", "Epilogue", "Afterword", "Side Story", "Interlude",
+		"☆编辑推荐", "【楔子】", "写在前面", "作者的话",
+	}
+	for _, line := range positives {
+		if !match(line) {
+			t.Errorf("应识别为章节: %q", line)
+		}
+	}
+
+	negatives := []string{
+		"第三回合开始",
+		"第一节课就要迟到了",
+		"这部小说很好看",
+		"这一集很好看",
+		"他打开了第一章的内容看了很久。",
+		"随便一行",
+		"Chapter of my life was hard", // 无数字
+		"China is large",
+	}
+	for _, line := range negatives {
+		if match(line) {
+			t.Errorf("不应识别为章节: %q", line)
+		}
+	}
+}
+
+func TestParse_AutoMark_RichFormats(t *testing.T) {
+	text := strings.Join([]string{
+		"楔子",
+		"　　引子正文。",
+		"第一章 启程",
+		"　　段一。",
+		"第2回 风云",
+		"　　段二。",
+		"第3话",
+		"　　段三。",
+		"【第4章】决战",
+		"　　段四。",
+		"Chapter 5: Finale",
+		"　　段五。",
+		"番外",
+		"　　段六。",
+		"Prologue", // 故意放后面测英文特称
+		"　　不应单独因正文误切。",
+	}, "\n")
+	chs, err := Parse(text, Options{AutoMark: true, RemoveBlankLine: true, ForceEmptyChapter: true})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []string{"楔子", "第一章 启程", "第2回 风云", "第3话", "【第4章】决战", "Chapter 5: Finale", "番外", "Prologue"}
+	if len(chs) != len(want) {
+		t.Fatalf("期望 %d 章,得到 %d titles=%v", len(want), len(chs), chapterTitles(chs))
+	}
+	for i, w := range want {
+		if chs[i].Title != w {
+			t.Errorf("第%d章标题: 期望 %q,得到 %q", i, w, chs[i].Title)
+		}
 	}
 }
 
