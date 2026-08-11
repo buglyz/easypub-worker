@@ -9,11 +9,13 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/easypub/go-easypub/internal/converter"
 	"github.com/easypub/go-easypub/internal/txt"
@@ -152,14 +154,16 @@ func detectHandler(req *detectReq, text string) (map[string]interface{}, error) 
 	}
 	titles := make([]string, 0, len(chapters))
 	for _, c := range chapters {
-		t := c.Title
+		t := strings.TrimSpace(c.Title)
 		if t == "" {
-			t = "(无标题章节)"
+			// 空标题不展示（书衣/声明等前置段仍会进 EPUB spine，但不进目录预览）。
+			continue
 		}
 		titles = append(titles, t)
 	}
 	return map[string]interface{}{
-		"count":    len(chapters),
+		// count 与预览目录一致：只计有标题的章。
+		"count":    len(titles),
 		"titles":   titles,
 		"encoding": "utf-8",
 	}, nil
@@ -301,22 +305,28 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "转换失败"})
 		return
 	}
-	// 下载标识 = 输出文件名。
+	// 磁盘文件用随机名防冲突；下载展示名保留上传原文件名。
 	dlName := filepath.Base(res.EpubPath)
+	epubDisplay := displayNameFromUpload(fileName, ".epub")
 	mobiName := ""
+	mobiDisplay := ""
 	if res.MobiPath != "" {
 		mobiName = filepath.Base(res.MobiPath)
+		mobiDisplay = displayNameFromUpload(fileName, ".mobi")
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"download": "/api/download/" + dlName,
-		"epub":     dlName,
-		"mobi":     mobiName,
-		"chapters": res.ChapterCount,
-		"encoding": res.Encoding,
+		"download":     "/api/download/" + dlName + "?name=" + url.QueryEscape(epubDisplay),
+		"epub":         dlName,
+		"epubName":     epubDisplay,
+		"mobi":         mobiName,
+		"mobiName":     mobiDisplay,
+		"chapters":     res.ChapterCount,
+		"encoding":     res.Encoding,
 	})
 }
 
 // handleDownload 提供已生成文件的下载。
+// 路径段必须是服务端生成的随机名；?name= 仅影响 Content-Disposition 展示名，不参与路径解析。
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/download/")
 	// 白名单文件名格式 + 防目录穿越。
@@ -333,16 +343,112 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	ext := strings.ToLower(filepath.Ext(name))
 	ct := "application/octet-stream"
-	if strings.HasSuffix(name, ".epub") {
+	if ext == ".epub" {
 		ct = "application/epub+zip"
-	} else if strings.HasSuffix(name, ".mobi") {
+	} else if ext == ".mobi" {
 		ct = "application/x-mobipocket-ebook"
 	}
+	display := sanitizeDownloadName(r.URL.Query().Get("name"), ext)
+	if display == "" {
+		display = name
+	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(display))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFile(w, r, full)
+}
+
+// displayNameFromUpload 由上传文件名生成下载展示名（主名 + 目标扩展名）。
+func displayNameFromUpload(uploadName, wantExt string) string {
+	base := filepath.Base(strings.ReplaceAll(uploadName, "\\", "/"))
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	stem = sanitizeFileStem(stem)
+	if stem == "" {
+		stem = "book"
+	}
+	wantExt = strings.ToLower(wantExt)
+	if wantExt != ".epub" && wantExt != ".mobi" {
+		wantExt = ".epub"
+	}
+	return stem + wantExt
+}
+
+// sanitizeFileStem 去掉路径分隔与 Windows 非法字符，保留可读主名。
+func sanitizeFileStem(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r < 32 || r == 127:
+			continue
+		case strings.ContainsRune(`<>:"/\|?*`, r):
+			b.WriteByte('_')
+		case unicode.IsSpace(r):
+			// 保留普通空格，折叠由 Trim 处理两端。
+			b.WriteRune(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	out = strings.Trim(out, ". ")
+	// 限制长度，避免超长 Content-Disposition。
+	const maxRunes = 120
+	if rs := []rune(out); len(rs) > maxRunes {
+		out = string(rs[:maxRunes])
+		out = strings.TrimRight(out, ". ")
+	}
+	if out == "." || out == ".." {
+		return ""
+	}
+	return out
+}
+
+// sanitizeDownloadName 校验客户端传入的展示名：只允许安全字符，扩展名必须匹配产物。
+func sanitizeDownloadName(raw, wantExt string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	base := filepath.Base(strings.ReplaceAll(raw, "\\", "/"))
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	stem = sanitizeFileStem(stem)
+	if stem == "" {
+		return ""
+	}
+	wantExt = strings.ToLower(wantExt)
+	if wantExt != ".epub" && wantExt != ".mobi" {
+		return ""
+	}
+	return stem + wantExt
+}
+
+// contentDispositionAttachment 生成兼容中文的 Content-Disposition。
+func contentDispositionAttachment(name string) string {
+	// ASCII 回退名：非 ASCII 替换为 _，供旧客户端使用。
+	var ascii strings.Builder
+	for _, r := range name {
+		if r < 128 && r >= 32 && r != '"' && r != '\\' {
+			ascii.WriteByte(byte(r))
+		} else {
+			ascii.WriteByte('_')
+		}
+	}
+	fallback := ascii.String()
+	if fallback == "" || fallback == "." || fallback == ".." {
+		fallback = "download"
+	}
+	// RFC 5987 filename*
+	encoded := url.PathEscape(name)
+	// PathEscape 保留部分字符，对 Content-Disposition 再把空格编成 %20。
+	encoded = strings.ReplaceAll(encoded, "+", "%20")
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fallback, encoded)
 }
 
 // safeErr 返回不泄漏绝对路径/系统细节的错误文案。

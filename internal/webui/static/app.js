@@ -245,8 +245,11 @@
     list.className = "chapter-list";
     var titles = Array.isArray(data.titles) ? data.titles : [];
     titles.slice(0, PREVIEW_LIMIT).forEach(function (chapterTitle) {
+      if (!chapterTitle) {
+        return;
+      }
       var item = document.createElement("li");
-      item.textContent = chapterTitle || "(无标题章节)";
+      item.textContent = chapterTitle;
       list.appendChild(item);
     });
     if (titles.length > PREVIEW_LIMIT) {
@@ -264,11 +267,15 @@
     setFlow("layout", "active", "使用当前参数");
   }
 
-  function createDownloadLink(label, url, secondary) {
+  function createDownloadLink(label, url, secondary, downloadName) {
     var link = document.createElement("a");
     link.className = secondary ? "download-link secondary" : "download-link";
     link.href = url;
-    link.setAttribute("download", "");
+    if (downloadName) {
+      link.setAttribute("download", downloadName);
+    } else {
+      link.setAttribute("download", "");
+    }
     var text = document.createElement("span");
     text.textContent = label;
     var arrow = document.createElement("span");
@@ -283,17 +290,27 @@
     result.classList.remove("is-error");
     resultKicker.textContent = "转换完成";
     resultTitle.textContent = "电子书已准备好";
-    resultMeta.textContent = (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "-");
+    var epubLabel = data.epubName || "EPUB 文件";
+    resultMeta.textContent =
+      (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "-") +
+      (data.epubName ? " · " + data.epubName : "");
     resultActions.textContent = "";
     if (data.download) {
-      resultActions.appendChild(createDownloadLink("EPUB 文件", data.download, false));
+      resultActions.appendChild(
+        createDownloadLink(epubLabel, data.download, false, data.epubName || "")
+      );
     }
     if (data.mobi) {
+      var mobiURL = "/api/download/" + encodeURIComponent(data.mobi);
+      if (data.mobiName) {
+        mobiURL += "?name=" + encodeURIComponent(data.mobiName);
+      }
       resultActions.appendChild(
         createDownloadLink(
-          "MOBI 文件",
-          "/api/download/" + encodeURIComponent(data.mobi),
-          true
+          data.mobiName || "MOBI 文件",
+          mobiURL,
+          true,
+          data.mobiName || ""
         )
       );
     }

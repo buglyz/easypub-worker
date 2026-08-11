@@ -194,6 +194,46 @@ func TestBookTOC_ListsAllChapters(t *testing.T) {
 	}
 }
 
+func TestEmptyTitle_NotShownInTOCOrHeading(t *testing.T) {
+	b := &Book{
+		Title:    "测试书",
+		Author:   "测试者",
+		Language: "zh-CN",
+		Date:     "2025",
+		UID:      "easypub-test",
+		CSS:      css.Generate(css.Default(nil)),
+		Chapters: []txt.Chapter{
+			{Title: "", Body: []string{"　　声明段落。"}},
+			{Title: "作品简介", Body: []string{"　　简介。"}},
+			{Title: "第1章 开端", Body: []string{"　　正文。"}},
+		},
+	}
+	toc := bookTOCHTML(b)
+	if strings.Contains(toc, "第0章") || strings.Contains(toc, "无标题") {
+		t.Fatalf("目录不应伪造空标题: %s", toc)
+	}
+	if strings.Contains(toc, `href="chapter0.html"`) {
+		t.Fatal("空标题章不应出现在 HTML 目录")
+	}
+	if !strings.Contains(toc, `href="chapter1.html">作品简介</a>`) {
+		t.Fatal("有标题章应在目录中")
+	}
+	ch0 := chapterHTML(b, 0)
+	if strings.Contains(ch0, `class="titlel2std"`) {
+		t.Fatalf("空标题章不应渲染 h2: %s", ch0)
+	}
+	if !strings.Contains(ch0, `　　声明段落。`) {
+		t.Fatal("空标题章正文仍应保留")
+	}
+	ncx := ncxXML(b)
+	if strings.Contains(ncx, `id="chapter0"`) || strings.Contains(ncx, "第0章") {
+		t.Fatalf("NCX 不应包含空标题导航: %s", ncx)
+	}
+	if !strings.Contains(ncx, `<navLabel><text>作品简介</text></navLabel>`) {
+		t.Fatal("NCX 应包含有标题章")
+	}
+}
+
 func TestBuild_HTMLHasBOM(t *testing.T) {
 	dir := t.TempDir()
 	out := dir + "/out.epub"

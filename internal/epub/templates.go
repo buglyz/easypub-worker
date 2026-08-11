@@ -41,12 +41,12 @@ func bookTOCHTML(b *Book) string {
 	var dl strings.Builder
 	dl.WriteString("<dl>\n")
 	for i, c := range b.Chapters {
-		title := c.Title
-		if title == "" {
-			title = fmt.Sprintf("第%d章", i)
+		// 空标题不进目录（正文仍在 spine 中可翻页阅读）。
+		if strings.TrimSpace(c.Title) == "" {
+			continue
 		}
 		dl.WriteString(fmt.Sprintf("<dt class=\"tocl2\"><a href=\"chapter%d.html\">%s</a></dt>\n",
-			i, util.EscapeText(title)))
+			i, util.EscapeText(c.Title)))
 	}
 	dl.WriteString("</dl>\n")
 	body := fmt.Sprintf("<h2 class=\"titletoc\">\n目录\n</h2>\n<div class=\"toc\">\n%s</div>", dl.String())
@@ -54,14 +54,13 @@ func bookTOCHTML(b *Book) string {
 }
 
 // chapterHTML 生成 chapterN.html。
-// 与样例对齐：<h2 id="title" class="titlel2std">标题</h2> 后接若干 <p class="a">段落</p>。
+// 与样例对齐：有标题时 <h2 id="title" class="titlel2std">标题</h2>，后接若干 <p class="a">段落</p>。
+// 空标题不渲染 h2，避免出现「第0章」或空白标题行。
 func chapterHTML(b *Book, idx int) string {
 	c := b.Chapters[idx]
 	var body strings.Builder
-	if c.Title != "" {
+	if strings.TrimSpace(c.Title) != "" {
 		body.WriteString(fmt.Sprintf("<h2 id=\"title\" class=\"titlel2std\">%s</h2>\n", util.EscapeText(c.Title)))
-	} else {
-		body.WriteString("<h2 id=\"title\" class=\"titlel2std\"></h2>\n")
 	}
 	for _, p := range c.Body {
 		// 空段：保持 <p class="a"></p> 形式。
@@ -165,12 +164,12 @@ func ncxXML(b *Book) string {
 	playOrder++
 
 	for i, c := range b.Chapters {
-		title := c.Title
-		if title == "" {
-			title = fmt.Sprintf("第%d章", i)
+		// 空标题不进 NCX 导航（与 HTML 目录一致）。
+		if strings.TrimSpace(c.Title) == "" {
+			continue
 		}
 		sb.WriteString(fmt.Sprintf("<navPoint id=\"chapter%d\" playOrder=\"%d\">\n", i, playOrder))
-		sb.WriteString(fmt.Sprintf("<navLabel><text>%s</text></navLabel>\n", util.EscapeText(title)))
+		sb.WriteString(fmt.Sprintf("<navLabel><text>%s</text></navLabel>\n", util.EscapeText(c.Title)))
 		sb.WriteString(fmt.Sprintf("<content src=\"chapter%d.html\"/>\n", i))
 		sb.WriteString("</navPoint>\n\n")
 		playOrder++

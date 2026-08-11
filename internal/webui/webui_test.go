@@ -5,6 +5,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -173,7 +174,7 @@ func TestConvert_ProducesEPUB(t *testing.T) {
 	_ = w.WriteField("fontSize", "100")
 	_ = w.WriteField("marginTop", "5")
 	_ = w.WriteField("textAlign", "0")
-	fw, _ := w.CreateFormFile("file", "book.txt")
+	fw, _ := w.CreateFormFile("file", "我的小说.txt")
 	_, _ = fw.Write([]byte(content))
 	w.Close()
 
@@ -187,6 +188,12 @@ func TestConvert_ProducesEPUB(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "download") {
 		t.Fatalf("response 缺 download: %s", body)
+	}
+	if !strings.Contains(body, `"epubName":"我的小说.epub"`) {
+		t.Fatalf("应返回原文件名 epubName, body=%s", body)
+	}
+	if !strings.Contains(body, "name=") {
+		t.Fatalf("download URL 应带 name 查询参数, body=%s", body)
 	}
 	// 输出目录应存在 epub。
 	files, _ := os.ReadDir(s.outputs)
@@ -227,7 +234,7 @@ func TestConvert_DownloadRoundTrip(t *testing.T) {
 	if epubName == "" {
 		t.Fatal("无 epub 产物")
 	}
-	dreq := httptest.NewRequest(http.MethodGet, "/api/download/"+epubName, nil)
+	dreq := httptest.NewRequest(http.MethodGet, "/api/download/"+epubName+"?name="+url.QueryEscape("我的小说.epub"), nil)
 	drec := httptest.NewRecorder()
 	s.handleDownload(drec, dreq)
 	if drec.Code != http.StatusOK {
@@ -236,10 +243,48 @@ func TestConvert_DownloadRoundTrip(t *testing.T) {
 	if drec.Body.Len() == 0 {
 		t.Fatal("下载内容为空")
 	}
+	cd := drec.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "filename*") || !strings.Contains(cd, "我的小说") && !strings.Contains(cd, "%E6%88%91%E7%9A%84%E5%B0%8F%E8%AF%B4") {
+		// filename* 应含 UTF-8 百分号编码的中文名。
+		if !strings.Contains(cd, "%E6%88%91") {
+			t.Errorf("Content-Disposition 应保留原文件名, got %q", cd)
+		}
+	}
 	// 校验是 zip(mimetype 起始)。
 	peek := drec.Body.Bytes()
 	if !bytes.Contains(peek, []byte("PK\x03\x04")) {
 		t.Error("不是有效的 zip 文件")
+	}
+}
+
+func TestDisplayNameFromUpload(t *testing.T) {
+	cases := []struct {
+		in, ext, want string
+	}{
+		{"book.txt", ".epub", "book.epub"},
+		{"我的小说.txt", ".epub", "我的小说.epub"},
+		{`C:\foo\bar\小说.gbk`, ".mobi", "小说.mobi"},
+		{"../../etc/passwd.txt", ".epub", "passwd.epub"},
+		{"a<>b|c?.txt", ".epub", "a__b_c_.epub"},
+		{"", ".epub", "book.epub"},
+	}
+	for _, c := range cases {
+		got := displayNameFromUpload(c.in, c.ext)
+		if got != c.want {
+			t.Errorf("displayNameFromUpload(%q,%q)=%q, want %q", c.in, c.ext, got, c.want)
+		}
+	}
+}
+
+func TestSanitizeDownloadName_RejectsTraversal(t *testing.T) {
+	if got := sanitizeDownloadName("../secret.epub", ".epub"); got != "secret.epub" {
+		t.Errorf("路径应被剥离为 base, got %q", got)
+	}
+	if got := sanitizeDownloadName("ok.txt", ".epub"); got != "ok.epub" {
+		t.Errorf("扩展名应强制为产物类型, got %q", got)
+	}
+	if got := sanitizeDownloadName("", ".epub"); got != "" {
+		t.Errorf("空名应返回空, got %q", got)
 	}
 }
 
