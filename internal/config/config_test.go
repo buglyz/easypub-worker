@@ -68,6 +68,23 @@ func TestLoad_RoundTrip(t *testing.T) {
 	if len(cfg.MyRegExp.AdditionalReg) != 1 || cfg.MyRegExp.AdditionalReg[0] != `^\s*(前言|自序)` {
 		t.Errorf("AdditionalReg=%v", cfg.MyRegExp.AdditionalReg)
 	}
+
+	// 真往返：Save → Load 关键关键字段不丢。
+	out := filepath.Join(dir, "out.xml")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg2, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load roundtrip: %v", err)
+	}
+	if cfg2.Recent.LineHeight != cfg.Recent.LineHeight ||
+		cfg2.Recent.FontSize != cfg.Recent.FontSize ||
+		cfg2.Recent.FullReg != cfg.Recent.FullReg ||
+		cfg2.Advanced.ForceEmptyChapter != cfg.Advanced.ForceEmptyChapter ||
+		cfg2.Advanced.KindleGenExe != cfg.Advanced.KindleGenExe {
+		t.Errorf("往返字段不一致: %#v vs %#v", cfg.Recent, cfg2.Recent)
+	}
 }
 
 func TestLoadEReaders(t *testing.T) {

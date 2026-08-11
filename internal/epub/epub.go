@@ -173,8 +173,15 @@ func (g *Generator) writeZip(outPath string) error {
 	}
 	defer f.Close()
 	w := zip.NewWriter(f)
+	// 固定时间戳，避免每次生成因 Modified 不同导致字节级 diff。
+	// 使用 Unix epoch，与跨平台确定性构建目标一致。
+	fixedTime := time.Unix(0, 0).UTC()
 	for _, e := range g.entries {
-		hdr := &zip.FileHeader{Name: e.name, Method: e.method}
+		hdr := &zip.FileHeader{
+			Name:     e.name,
+			Method:   e.method,
+			Modified: fixedTime,
+		}
 		fw, err := w.CreateHeader(hdr)
 		if err != nil {
 			return err

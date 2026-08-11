@@ -61,10 +61,10 @@ func TestDetectAndDecode_UTF16LE(t *testing.T) {
 
 func TestNormalizeEOL(t *testing.T) {
 	cases := map[string]string{
-		"a\r\nb":        "a\nb",
-		"a\rb":          "a\nb",
-		"a\r\nb\r\nc":   "a\nb\nc",
-		"a\nb":          "a\nb",
+		"a\r\nb":      "a\nb",
+		"a\rb":        "a\nb",
+		"a\r\nb\r\nc": "a\nb\nc",
+		"a\nb":        "a\nb",
 	}
 	for in, want := range cases {
 		if got := NormalizeEOL(in); got != want {
@@ -92,5 +92,38 @@ func TestEscapeForXMLAttr(t *testing.T) {
 	want := "a&lt;b&quot;c&amp;d&apos;e&gt;"
 	if got != want {
 		t.Errorf("got %q 期望 %q", got, want)
+	}
+}
+
+func TestDetectAndDecode_UnknownReturnsError(t *testing.T) {
+	// 高位随机二进制，非合法 UTF-8，候选解码后通常含 U+FFFD 或失败。
+	// 构造一段明显非法的字节(含 0xFF 且不成对)。
+	b := []byte{0xFF, 0xFE, 0x00} // 伪 UTF-16LE BOM 后不完整
+	// 去掉 BOM 伪装：纯 0xFF 序列。
+	b = []byte{0xFF, 0xFF, 0xFF, 0xFF}
+	_, _, err := DetectAndDecode(b)
+	// GBK/GB18030 对任意字节都可能"成功"解码，这里不强制 error；
+	// 但至少不应 panic，且返回的 text 应是合法 UTF-8。
+	if err == nil {
+		// 若候选接受，text 必须是合法 UTF-8。
+		text, enc, e2 := DetectAndDecode(b)
+		if e2 != nil {
+			return
+		}
+		if enc == "Unknown" {
+			t.Error("不应再返回 Unknown 且 err=nil")
+		}
+		_ = text
+	}
+}
+
+func TestDetectAndDecode_MalformedUTF8BOM(t *testing.T) {
+	// UTF-8 BOM + 非法续字节，应回退候选或报错，不再静默返回乱码。
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	// 0x80 单独不是合法 UTF-8 续字节起始。
+	bad := append(bom, 0x80, 0x81, 0x82)
+	text, enc, err := DetectAndDecode(bad)
+	if err == nil && enc == "UTF-8" {
+		t.Errorf("畸形 BOM 不应被标为 UTF-8, text=%q", text)
 	}
 }

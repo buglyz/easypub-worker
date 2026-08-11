@@ -52,6 +52,24 @@ func TestParse_NoMarks_FallsBackToOneChapter(t *testing.T) {
 	}
 }
 
+func TestParse_WholeBookMode(t *testing.T) {
+	text := "第1章 开端\n正文一\n第2章 结尾\n正文二\n"
+	chs, err := Parse(text, Options{
+		SplitMode:         2,
+		RemoveBlankLine:   true,
+		ForceEmptyChapter: true,
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(chs) != 1 {
+		t.Fatalf("整本一章期望 1 章,得到 %d", len(chs))
+	}
+	if len(chs[0].Body) != 4 {
+		t.Fatalf("整本一章正文期望 4 段,得到 %d", len(chs[0].Body))
+	}
+}
+
 func TestParse_RemoveBlankLine(t *testing.T) {
 	text := "第1章 测试\n"
 	text += "　　段落一。\n"
@@ -72,10 +90,10 @@ func TestParse_AddSpaceBetweenParagraphs(t *testing.T) {
 	text += "\n"
 	text += "　　段落二。\n"
 	chs, _ := Parse(text, Options{
-		AutoMark:        true,
-		RemoveBlankLine: false,
-		AddSpace:        true,
-		AddSpaceCount:   2,
+		AutoMark:          true,
+		RemoveBlankLine:   false,
+		AddSpace:          true,
+		AddSpaceCount:     2,
 		ForceEmptyChapter: true,
 	})
 	if len(chs[0].Body) != 4 {
@@ -97,9 +115,9 @@ func TestParse_PreservesFullWidthSpaceIndent(t *testing.T) {
 
 func TestBuildSimplePattern(t *testing.T) {
 	p := buildSimplePattern(Options{
-		SimpleRegP1:         "[第卷]",
-		SimpleRegP2:         0,
-		SimpleRegP3:         "[章回卷节集部]",
+		SimpleRegP1:           "[第卷]",
+		SimpleRegP2:           0,
+		SimpleRegP3:           "[章回卷节集部]",
 		SimpleRegLeadingSpace: true,
 	})
 	if p == nil {
@@ -128,13 +146,13 @@ func TestParse_CNumerals(t *testing.T) {
 	text := "第一章 开端\n"
 	text += "　　段一。\n"
 	chs, _ := Parse(text, Options{
-		SimpleRegP1:         "[第卷]",
-		SimpleRegP2:         1,
-		SimpleRegP3:         "[章回卷节集部]",
+		SimpleRegP1:           "[第卷]",
+		SimpleRegP2:           1,
+		SimpleRegP3:           "[章回卷节集部]",
 		SimpleRegLeadingSpace: true,
-		AutoMark:            false,
-		RemoveBlankLine:     true,
-		ForceEmptyChapter:   true,
+		AutoMark:              false,
+		RemoveBlankLine:       true,
+		ForceEmptyChapter:     true,
 	})
 	if len(chs) != 1 {
 		t.Fatalf("期望 1 章,得到 %d", len(chs))
@@ -158,4 +176,76 @@ func TestParse_EscapeAngleBrackets(t *testing.T) {
 	if !strings.Contains(got, "&lt;标签&gt;") {
 		t.Errorf("期望转义后含 '&lt;标签&gt;',得到 %q", got)
 	}
+}
+
+func TestParse_InvalidSplitMode(t *testing.T) {
+	_, err := Parse("正文\n", Options{SplitMode: 3})
+	if err == nil {
+		t.Fatal("SplitMode=3 应返回 error")
+	}
+	_, err = Parse("正文\n", Options{SplitMode: -1})
+	if err == nil {
+		t.Fatal("SplitMode=-1 应返回 error")
+	}
+}
+
+func TestParse_SplitByCount(t *testing.T) {
+	// 每行约 5 字, SplitCount=10 应切成多章。
+	text := "段落一二三四五\n段落六七八九十\n段落甲乙丙丁戊\n"
+	chs, err := Parse(text, Options{
+		SplitMode:         1,
+		SplitCount:        10,
+		RemoveBlankLine:   true,
+		ForceEmptyChapter: true,
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(chs) < 2 {
+		t.Fatalf("按字数切期望 >=2 章,得到 %d", len(chs))
+	}
+}
+
+func TestParse_EmptyChapterDroppedWhenNotForced(t *testing.T) {
+	// 第1章 后紧接第2章,中间无正文; ForceEmptyChapter=false 应丢弃空章。
+	text := "第1章 空章\n第2章 有正文\n　　段落。\n"
+	chs, err := Parse(text, Options{
+		AutoMark:          true,
+		RemoveBlankLine:   true,
+		ForceEmptyChapter: false,
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, c := range chs {
+		if c.Title == "第1章 空章" {
+			t.Fatalf("ForceEmptyChapter=false 时不应保留空章,得到 %v", chs)
+		}
+		if c.Body == nil {
+			t.Error("Body 应为 []string{} 而非 nil")
+		}
+	}
+	if len(chs) != 1 || chs[0].Title != "第2章 有正文" {
+		t.Fatalf("期望仅保留第2章,得到 %v", chs)
+	}
+}
+
+func TestParse_AutoMark_DoesNotCutBodySentences(t *testing.T) {
+	// "第三回合开始" 不应被误切成章节标题。
+	text := "第一段\n第三回合开始\n第二段\n"
+	chs, err := Parse(text, Options{AutoMark: true, RemoveBlankLine: true})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(chs) != 1 {
+		t.Fatalf("正文句子不应被切章,期望 1 章,得到 %d titles=%v", len(chs), chapterTitles(chs))
+	}
+}
+
+func chapterTitles(chs []Chapter) []string {
+	out := make([]string, len(chs))
+	for i, c := range chs {
+		out[i] = c.Title
+	}
+	return out
 }

@@ -3,90 +3,225 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1f5c4a">
 <title>EasyPub - TXT 转 EPUB</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>EasyPub</h1>
-  <span class="subtitle">TXT 转 EPUB 网页版</span>
-</header>
+<div class="site-frame">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="EasyPub 首页">
+      <span class="brand-mark" aria-hidden="true">EP</span>
+      <span>
+        <strong>EasyPub</strong>
+        <small>TXT 转 EPUB</small>
+      </span>
+    </a>
+    <div class="service-state">
+      <span class="state-dot" aria-hidden="true"></span>
+      <span id="serviceState">服务就绪</span>
+    </div>
+  </header>
 
-<main>
-  <section class="card">
-    <h2>① 选择 TXT 文件</h2>
-    <div class="dropzone" id="dropzone">
-      <input type="file" id="file" accept=".txt,.utf8,.gbk,.utf-8" hidden>
-      <p>点击选择或拖拽 TXT 文件到此处</p>
-      <p class="fileinfo" id="fileinfo"></p>
-    </div>
-  </section>
+  <main class="app-shell">
+    <section class="workspace" aria-label="TXT 转 EPUB 工作区">
+      <div class="intro">
+        <p class="eyebrow">TXT → EPUB</p>
+        <h1>把文字整理成一本书</h1>
+        <p class="intro-copy">上传文本，确认章节和排版，生成可直接下载的 EPUB 文件。</p>
+      </div>
 
-  <section class="card">
-    <h2>② 图书信息</h2>
-    <div class="form-row">
-      <label>书名</label>
-      <input type="text" id="title" placeholder="留空自动从 TXT 推断">
-    </div>
-    <div class="form-row">
-      <label>作者</label>
-      <input type="text" id="author" placeholder="可选">
-    </div>
-  </section>
+      <section class="section-block" aria-labelledby="sourceHeading">
+        <div class="section-heading">
+          <div class="heading-group">
+            <span class="step-number">01</span>
+            <div>
+              <h2 id="sourceHeading">导入文本</h2>
+              <p>支持 TXT、UTF-8、GBK 文件，单个文件最大 64 MB。</p>
+            </div>
+          </div>
+          <button class="btn btn-quiet" id="resetBtn" type="button" title="清空当前设置">
+            <span aria-hidden="true">↺</span>重新开始
+          </button>
+        </div>
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择或拖拽 TXT 文件">
+          <input type="file" id="file" accept=".txt,.utf8,.gbk,.utf-8,text/plain" hidden>
+          <div class="upload-symbol" aria-hidden="true">TXT</div>
+          <strong>拖拽 TXT 文件到这里</strong>
+          <span>或点击选择本地文件</span>
+          <div class="dropzone-actions">
+            <button class="btn btn-secondary" id="chooseBtn" type="button">
+              <span aria-hidden="true">＋</span>选择文件
+            </button>
+          </div>
+          <div class="fileinfo" id="fileinfo" hidden></div>
+        </div>
+      </section>
 
-  <section class="card">
-    <h2>③ 分章设置 <button class="btn small" id="detectBtn" disabled>识别章节</button></h2>
-    <div class="form-row">
-      <label>识别方式</label>
-      <select id="splitMode">
-        <option value="0">自动识别(默认)</option>
-        <option value="1">按字数分章</option>
-        <option value="2">整本一章</option>
-      </select>
-    </div>
-    <div class="form-row" id="fullregRow">
-      <label>自定义正则</label>
-      <input type="text" id="fullReg" placeholder="如 ^\s*第\s*[0-9]+\s*章">
-    </div>
-    <div class="form-row">
-      <label class="checkbox"><input type="checkbox" id="removeBlank" checked> 删除空行</label>
-    </div>
-    <div class="preview" id="preview"></div>
-  </section>
+      <section class="section-block" aria-labelledby="metadataHeading">
+        <div class="section-heading">
+          <div class="heading-group">
+            <span class="step-number">02</span>
+            <div>
+              <h2 id="metadataHeading">图书信息</h2>
+              <p>留空时会从文本内容或文件名自动推断书名。</p>
+            </div>
+          </div>
+        </div>
+        <div class="form-grid form-grid-two">
+          <label class="field">
+            <span>书名</span>
+            <input type="text" id="title" placeholder="例如：时间旅行者">
+          </label>
+          <label class="field">
+            <span>作者</span>
+            <input type="text" id="author" placeholder="可选">
+          </label>
+        </div>
+      </section>
 
-  <section class="card">
-    <h2>④ 排版参数</h2>
-    <div class="form-row">
-      <label>行高(%)</label>
-      <input type="number" id="lineHeight" value="120" min="100" max="300">
-    </div>
-    <div class="form-row">
-      <label>字号(%)</label>
-      <input type="number" id="fontSize" value="100" min="50" max="300">
-    </div>
-    <div class="form-row">
-      <label>段前距(px)</label>
-      <input type="number" id="marginTop" value="5" min="0" max="50">
-    </div>
-    <div class="form-row">
-      <label>对齐</label>
-      <select id="textAlign">
-        <option value="0">两端对齐</option>
-        <option value="1">左对齐</option>
-        <option value="2">居中</option>
-        <option value="3">右对齐</option>
-      </select>
-    </div>
-  </section>
+      <section class="section-block" aria-labelledby="chapterHeading">
+        <div class="section-heading">
+          <div class="heading-group">
+            <span class="step-number">03</span>
+            <div>
+              <h2 id="chapterHeading">章节切分</h2>
+              <p>先识别章节，确认目录后再开始转换。</p>
+            </div>
+          </div>
+          <button class="btn btn-secondary" id="detectBtn" type="button" disabled>
+            <span aria-hidden="true">⌁</span>识别章节
+          </button>
+        </div>
+        <div class="form-grid form-grid-two">
+          <label class="field">
+            <span>切分方式</span>
+            <select id="chapterMode">
+              <option value="auto">自动识别</option>
+              <option value="custom">自定义正则</option>
+              <option value="whole">整本一章</option>
+            </select>
+          </label>
+          <label class="field field-wide" id="fullRegField">
+            <span>章节正则</span>
+            <input type="text" id="fullReg" placeholder="例如：^\s*第\s*[0-9]+\s*章">
+          </label>
+        </div>
+        <div class="inline-options">
+          <label class="check-field">
+            <input type="checkbox" id="removeBlank" checked>
+            <span>删除空行</span>
+          </label>
+        </div>
+        <div class="preview" id="preview" aria-live="polite">
+          <div class="empty-state">选择文件后点击“识别章节”，这里会显示目录预览。</div>
+        </div>
+      </section>
 
-  <section class="card">
-    <button class="btn primary" id="convertBtn" disabled>⑤ 开始转换</button>
-    <div class="progress" id="progress"></div>
-    <div class="result" id="result"></div>
-  </section>
-</main>
+      <section class="section-block" aria-labelledby="layoutHeading">
+        <div class="section-heading">
+          <div class="heading-group">
+            <span class="step-number">04</span>
+            <div>
+              <h2 id="layoutHeading">阅读排版</h2>
+              <p>参数会写入 EPUB 的正文样式。</p>
+            </div>
+          </div>
+        </div>
+        <div class="form-grid form-grid-four">
+          <label class="field">
+            <span>行高 <em>%</em></span>
+            <input type="number" id="lineHeight" value="120" min="100" max="300" step="5">
+          </label>
+          <label class="field">
+            <span>字号 <em>%</em></span>
+            <input type="number" id="fontSize" value="100" min="50" max="300" step="5">
+          </label>
+          <label class="field">
+            <span>段前距 <em>px</em></span>
+            <input type="number" id="marginTop" value="5" min="0" max="50">
+          </label>
+          <label class="field">
+            <span>缩进 <em>em</em></span>
+            <input type="number" id="indent" value="0" min="0" max="4" step="0.5">
+          </label>
+        </div>
+        <div class="layout-bottom">
+          <label class="field align-field">
+            <span>正文对齐</span>
+            <select id="textAlign">
+              <option value="0">两端对齐</option>
+              <option value="1">左对齐</option>
+              <option value="2">居中</option>
+              <option value="3">右对齐</option>
+            </select>
+          </label>
+          <label class="check-field mobi-option">
+            <input type="checkbox" id="enableMobi">
+            <span>同时生成 MOBI</span>
+            <small>需要服务器已安装 kindlegen</small>
+          </label>
+        </div>
+      </section>
 
-<footer>go-easypub · WebUI</footer>
+      <div class="action-bar">
+        <div>
+          <strong id="actionTitle">准备开始</strong>
+          <span id="progress" aria-live="polite">请选择一个 TXT 文件。</span>
+        </div>
+        <button class="btn btn-primary" id="convertBtn" type="button" disabled>
+          <span aria-hidden="true">↓</span>开始转换
+        </button>
+      </div>
+    </section>
+
+    <aside class="inspector" aria-label="转换状态">
+      <section class="inspector-section">
+        <div class="inspector-title">
+          <span>转换流程</span>
+          <span class="inspector-count" id="chapterCount">0 章</span>
+        </div>
+        <ol class="flow-list">
+          <li class="flow-item active" data-flow="source">
+            <span class="flow-index">1</span>
+            <div><strong>导入文本</strong><small id="flowSource">等待文件</small></div>
+          </li>
+          <li class="flow-item" data-flow="chapter">
+            <span class="flow-index">2</span>
+            <div><strong>确认章节</strong><small id="flowChapter">尚未识别</small></div>
+          </li>
+          <li class="flow-item" data-flow="layout">
+            <span class="flow-index">3</span>
+            <div><strong>设置排版</strong><small id="flowLayout">使用默认参数</small></div>
+          </li>
+          <li class="flow-item" data-flow="convert">
+            <span class="flow-index">4</span>
+            <div><strong>生成文件</strong><small id="flowConvert">等待转换</small></div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="inspector-section file-summary">
+        <div class="inspector-title"><span>当前文件</span></div>
+        <div class="summary-placeholder" id="summaryPlaceholder">还没有选择 TXT 文件。</div>
+        <dl id="fileSummary" hidden>
+          <div><dt>文件名</dt><dd id="summaryName">-</dd></div>
+          <div><dt>文件大小</dt><dd id="summarySize">-</dd></div>
+          <div><dt>识别编码</dt><dd id="summaryEncoding">待识别</dd></div>
+        </dl>
+      </section>
+
+      <section class="result-panel" id="result" hidden aria-live="polite">
+        <div class="result-kicker">转换完成</div>
+        <h2 id="resultTitle">你的电子书已准备好</h2>
+        <p id="resultMeta">-</p>
+        <div class="result-actions" id="resultActions"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer>EasyPub · go-easypub</footer>
+</div>
 <script src="/app.js"></script>
 </body>
 </html>

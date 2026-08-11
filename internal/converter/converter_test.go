@@ -19,10 +19,10 @@ func TestConvert_BasicRoundTrip(t *testing.T) {
 	out := filepath.Join(dir, "out.epub")
 
 	res, err := Convert(Options{
-		Input:  in,
-		Output: out,
-		Title:  "测试书",
-		Author: "作者",
+		Input:        in,
+		Output:       out,
+		Title:        "测试书",
+		Author:       "作者",
 		TXTOverrides: nil, // 走默认
 	})
 	if err != nil {
@@ -93,24 +93,60 @@ func TestConvert_AutoInferTitle(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 	// 校验 opf 里标题被正确推断。
-	b, err := os.ReadFile(out)
+	r, err := zip.OpenReader(out)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatalf("OpenReader: %v", err)
 	}
-	zr, err := zip.NewReader(strings.NewReader(string(b)), int64(len(b)))
-	if err != nil {
-		t.Fatalf("zip.NewReader: %v", err)
-	}
-	for _, f := range zr.File {
-		if f.Name == "OEBPS/content.opf" {
-			rc, _ := f.Open()
-			defer rc.Close()
-			buf := make([]byte, 4096)
-			n, _ := rc.Read(buf)
-			if !strings.Contains(string(buf[:n]), "自动推断的书名") {
-				t.Errorf("书名未推断进入 opf: %s", string(buf[:n]))
-			}
-			return
+	defer r.Close()
+	for _, f := range r.File {
+		if f.Name != "OEBPS/content.opf" {
+			continue
 		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		buf := make([]byte, 4096)
+		n, _ := rc.Read(buf)
+		rc.Close()
+		if !strings.Contains(string(buf[:n]), "自动推断的书名") {
+			t.Errorf("书名未推断进入 opf: %s", string(buf[:n]))
+		}
+		return
+	}
+	t.Fatal("未找到 content.opf")
+}
+
+func TestInferTitle_OnlyBookNamePrefix(t *testing.T) {
+	if got := inferTitle("书名：我的书\n正文\n", "x.txt"); got != "我的书" {
+		t.Errorf("got=%q", got)
+	}
+	// 作者行不应被切成书名。
+	if got := inferTitle("作者：张三\n正文\n", "x.txt"); got != "作者：张三" {
+		t.Errorf("作者行应整行作标题, got=%q", got)
+	}
+	// 英文 Chapter 冒号不应切。
+	if got := inferTitle("Chapter 1: The Beginning\n", "x.txt"); got != "Chapter 1: The Beginning" {
+		t.Errorf("got=%q", got)
+	}
+}
+
+func TestConvert_BadConfigReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "book.txt")
+	if err := os.WriteFile(in, []byte("第1章\n正文\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badCfg := filepath.Join(dir, "config.xml")
+	if err := os.WriteFile(badCfg, []byte("not-xml<<<"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Convert(Options{
+		Input:      in,
+		Output:     filepath.Join(dir, "out.epub"),
+		ConfigPath: badCfg,
+	})
+	if err == nil {
+		t.Fatal("损坏 config 应返回 error")
 	}
 }

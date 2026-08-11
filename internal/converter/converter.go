@@ -32,10 +32,12 @@ type Options struct {
 	FontIndex int
 	// EnableMobi 是否调用 kindlegen 生成 MOBI。
 	EnableMobi bool
+	// Quiet 静默模式：抑制 kindlegen 输出。
+	Quiet bool
 	// TXTOverrides 可选的逐项覆盖(WebUI 传入)。为 nil 时全部读 config 或默认。
 	TXTOverrides *txt.Options
 	// CSSOverrides 可选的 CSS 排版覆盖(WebUI 传入)。
-	CSSOverrides  *CSSOverrides
+	CSSOverrides *CSSOverrides
 	// BaseDir 独立于 Input 的配置查找基准目录(如 WebUI 的工作目录)。
 	BaseDir string
 }
@@ -51,15 +53,12 @@ type CSSOverrides struct {
 
 // Result 描述一次转换的产物。
 type Result struct {
-	EpubPath    string
-	MobiPath    string
+	EpubPath     string
+	MobiPath     string
 	ChapterCount int
-	Encoding    string
-	OutputDir   string
+	Encoding     string
+	OutputDir    string
 }
-
-// EpubResult 是 Result 的精简别名(WebUI 未生成 MOBI 时复用)。
-type EpubResult = Result
 
 // Convert 执行完整转换，返回产物信息。
 func Convert(opt Options) (*Result, error) {
@@ -88,13 +87,15 @@ func Convert(opt Options) (*Result, error) {
 		cfg = c
 		cfgDir = filepath.Dir(opt.ConfigPath)
 	} else {
-		for _, cand := range []string{filepath.Join(baseDir, "config.xml"), "config.xml"} {
-			if fileExists(cand) {
-				if c, err := config.Load(cand); err == nil {
-					cfg = c
-				}
-				break
+		// 仅从 baseDir 探测，避免依赖 CWD 的隐式命中。
+		cand := filepath.Join(baseDir, "config.xml")
+		if fileExists(cand) {
+			c, err := config.Load(cand)
+			if err != nil {
+				return nil, fmt.Errorf("读取 config 失败(%s): %w", cand, err)
 			}
+			cfg = c
+			cfgDir = filepath.Dir(cand)
 		}
 	}
 
@@ -106,7 +107,7 @@ func Convert(opt Options) (*Result, error) {
 
 	txtOpt := buildTxtOptions(cfg)
 	if opt.TXTOverrides != nil {
-		txtOpt = *opt.TXTOverrides
+		txtOpt = mergeTxtOptions(txtOpt, *opt.TXTOverrides)
 	}
 	chapters, err := txt.Parse(text, txtOpt)
 	if err != nil {
@@ -155,6 +156,7 @@ func Convert(opt Options) (*Result, error) {
 	// 可选 MOBI。
 	if opt.EnableMobi {
 		mobiOpt := buildMobiOptions(cfg)
+		mobiOpt.Quiet = opt.Quiet
 		mobiPath, merr := mobi.Convert(mobiOpt, baseDir, outPath)
 		if merr != nil {
 			return res, fmt.Errorf("EPUB 已生成但 MOBI 失败: %w", merr)
@@ -171,21 +173,55 @@ func buildTxtOptions(cfg *config.Root) txt.Options {
 	}
 	r := cfg.Recent
 	return txt.Options{
-		SplitMode:              r.SplitMode,
-		SplitCount:             r.SplitCount,
-		FullReg:                r.FullReg,
-		SimpleRegP1:            r.SimpleRegP1,
-		SimpleRegP2:            r.SimpleRegP2,
-		SimpleRegP3:            r.SimpleRegP3,
-		SimpleRegExt:           r.SimpleRegExt,
-		SimpleRegLeadingSpace:  r.SimpleRegLeadSpace == 1,
-		AdditionalReg:          cfg.MyRegExp.AdditionalReg,
-		AutoMark:               r.AutoMark == 1,
-		RemoveBlankLine:        r.RemoveBlankLine == 1,
-		AddSpace:               r.AddSpace == 1,
-		AddSpaceCount:          r.AddSpaceCount,
-		ForceEmptyChapter:      cfg.Advanced.ForceEmptyChapter == 1,
+		SplitMode:             r.SplitMode,
+		SplitCount:            r.SplitCount,
+		FullReg:               r.FullReg,
+		SimpleRegP1:           r.SimpleRegP1,
+		SimpleRegP2:           r.SimpleRegP2,
+		SimpleRegP3:           r.SimpleRegP3,
+		SimpleRegExt:          r.SimpleRegExt,
+		SimpleRegLeadingSpace: r.SimpleRegLeadSpace == 1,
+		AdditionalReg:         cfg.MyRegExp.AdditionalReg,
+		AutoMark:              r.AutoMark == 1,
+		RemoveBlankLine:       r.RemoveBlankLine == 1,
+		AddSpace:              r.AddSpace == 1,
+		AddSpaceCount:         r.AddSpaceCount,
+		ForceEmptyChapter:     cfg.Advanced.ForceEmptyChapter == 1,
 	}
+}
+
+// mergeTxtOptions 将 override 中显式设置的字段合并到 base。
+// 字符串/切片非空才覆盖；布尔与整数因无法区分"未设"与"设为 false/0"，
+// 对 SplitMode/FullReg/AutoMark/RemoveBlankLine/AddSpace/ForceEmptyChapter/SplitCount/AddSpaceCount
+// 一律以 override 为准(WebUI 总会传完整表单)。
+// SimpleReg* / AdditionalReg 仅在 override 非空时覆盖，保留 config 中的预定义正则。
+func mergeTxtOptions(base, override txt.Options) txt.Options {
+	out := base
+	out.SplitMode = override.SplitMode
+	out.AutoMark = override.AutoMark
+	out.RemoveBlankLine = override.RemoveBlankLine
+	out.AddSpace = override.AddSpace
+	out.ForceEmptyChapter = override.ForceEmptyChapter
+	if override.SplitCount > 0 {
+		out.SplitCount = override.SplitCount
+	}
+	if override.AddSpaceCount > 0 {
+		out.AddSpaceCount = override.AddSpaceCount
+	}
+	if override.FullReg != "" {
+		out.FullReg = override.FullReg
+	}
+	if override.SimpleRegP1 != "" {
+		out.SimpleRegP1 = override.SimpleRegP1
+		out.SimpleRegP2 = override.SimpleRegP2
+		out.SimpleRegP3 = override.SimpleRegP3
+		out.SimpleRegExt = override.SimpleRegExt
+		out.SimpleRegLeadingSpace = override.SimpleRegLeadingSpace
+	}
+	if len(override.AdditionalReg) > 0 {
+		out.AdditionalReg = override.AdditionalReg
+	}
+	return out
 }
 
 func applyCSSOverrides(o *css.Options, cfg *config.Root) {
@@ -230,8 +266,12 @@ func buildMobiOptions(cfg *config.Root) mobi.Options {
 		return mobi.Options{ExeName: "kindlegen_v2.9.exe", SearchDirs: []string{"bin"}}
 	}
 	a := cfg.Advanced
+	exe := a.KindleGenExe
+	if exe == "" {
+		exe = "kindlegen"
+	}
 	return mobi.Options{
-		ExeName:      a.KindleGenExe,
+		ExeName:      exe,
 		Compress:     a.KindleGenCompress,
 		ExtraOptions: a.KindleGenOption,
 		SearchDirs:   []string{"bin"},
@@ -240,19 +280,31 @@ func buildMobiOptions(cfg *config.Root) mobi.Options {
 
 func resolveFontSrcs(cfg *config.Root, cfgDir, erPath string, fontIdx int) []string {
 	var fontSrcs []string
-	if cfg != nil {
-		p := erPath
-		if p == "" {
-			p = filepath.Join(cfgDir, "ereaders.xml")
+	// 优先使用用户显式传入的 ereaders 路径；否则随 config 目录。
+	p := erPath
+	if p == "" {
+		name := "ereaders.xml"
+		if cfg != nil && cfg.EReadersConfig != "" {
+			name = cfg.EReadersConfig
 		}
-		if fileExists(p) {
-			if er, err := cfg.LoadEReaders(cfgDir); err == nil && len(er.Models) > 0 {
-				idx := fontIdx
-				if idx < 0 || idx >= len(er.Models) {
-					idx = 0
+		p = filepath.Join(cfgDir, name)
+	}
+	if fileExists(p) {
+		// 始终按路径加载，避免 cfg.EReadersConfig 与 erPath 文件名不一致。
+		er, err := config.LoadEReadersFile(p)
+		if err == nil && len(er.Models) > 0 {
+			idx := fontIdx
+			if idx < 0 || idx >= len(er.Models) || len(er.Models[idx].Fonts) == 0 {
+				// 越界或选中空字体 model 时回退到第一个非空 model。
+				idx = 0
+				for i, m := range er.Models {
+					if len(m.Fonts) > 0 {
+						idx = i
+						break
+					}
 				}
-				fontSrcs = er.Models[idx].Fonts
 			}
+			fontSrcs = er.Models[idx].Fonts
 		}
 	}
 	if len(fontSrcs) == 0 {
@@ -265,15 +317,19 @@ func resolveFontSrcs(cfg *config.Root, cfgDir, erPath string, fontIdx int) []str
 }
 
 func inferTitle(text, path string) string {
+	// 只识别明确的书名前缀，避免把 "作者：x" / "Chapter 1: The Beginning" 误切为书名。
+	prefixes := []string{"书名：", "书名:", "题目：", "题目:", "Title:", "Title：", "TITLE:", "TITLE："}
 	for _, line := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" {
 			continue
 		}
-		if i := strings.IndexAny(t, ":："); i > 0 {
-			v := strings.TrimSpace(t[i+1:])
-			if v != "" {
-				return v
+		for _, p := range prefixes {
+			if strings.HasPrefix(t, p) {
+				v := strings.TrimSpace(t[len(p):])
+				if v != "" {
+					return v
+				}
 			}
 		}
 		return t
@@ -284,6 +340,9 @@ func inferTitle(text, path string) string {
 }
 
 func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
+	info, err := os.Stat(p)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }

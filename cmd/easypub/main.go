@@ -28,7 +28,8 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		if err := serveCmd(os.Args[2:]); err != nil {
-			log.Fatalf("easypub serve: %v", err)
+			log.Printf("easypub serve: %v", err)
+			os.Exit(2)
 		}
 		return
 	}
@@ -39,16 +40,18 @@ func main() {
 
 // serveCmd 启动 WebUI。
 func serveCmd(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":8080", "监听地址,如 :8080 或 127.0.0.1:9000")
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	addr := fs.String("addr", "127.0.0.1:8080", "监听地址(默认仅本机; 局域网请显式 0.0.0.0:8080,无鉴权)")
 	workdir := fs.String("dir", "", "工作目录(用于查找 config.xml/ereaders.xml,默认当前目录)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "easypub serve - 启动 WebUI")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "用法: easypub serve [-addr :8080] [-dir workdir]")
+		fmt.Fprintln(os.Stderr, "用法: easypub serve [-addr 127.0.0.1:8080] [-dir workdir]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
+		// -h 时 flag 返回 ErrHelp，统一退出码 2。
 		return err
 	}
 	dir := *workdir
@@ -98,6 +101,7 @@ func run() error {
 		EReadersPath: *ereaders,
 		FontIndex:    *fontIdx,
 		EnableMobi:   *enableMobi,
+		Quiet:        *quiet,
 	})
 	if err != nil {
 		return err
@@ -116,7 +120,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "用法:")
 	fmt.Fprintln(os.Stderr, "  easypub -i <input.txt> [options]     转换 TXT→EPUB")
-	fmt.Fprintln(os.Stderr, "  easypub serve [-addr :8080] [-dir d] 启动 WebUI")
+	fmt.Fprintln(os.Stderr, "  easypub serve [-addr 127.0.0.1:8080] [-dir d] 启动 WebUI")
 	fmt.Fprintln(os.Stderr, "  easypub -version                      打印版本")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "转换选项:")

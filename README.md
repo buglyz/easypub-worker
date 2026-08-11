@@ -30,9 +30,8 @@
 | Linux | amd64 | ✅ 纯静态二进制（CGO_ENABLED=0） |
 | Linux | arm64 | ✅（树莓派、ARM 服务器、Termux 均可） |
 | Windows | amd64 | ✅ |
-| macOS | amd64/arm64 | ✅（同 `make` 命令，未在 Makefile 列出但可手动 `GOOS=darwin go build`） |
-
-| macOS | amd64/arm64 | ✅（Release 工作流一并构建） |
+| macOS | amd64 | ✅（`make darwin` / Release / CI 交叉编译） |
+| macOS | arm64 | ✅（`make darwin` / Release / CI 交叉编译） |
 
 Android 不在本项目支持范围。
 
@@ -50,16 +49,21 @@ Android 不在本项目支持范围。
 
 **方式二：从源码构建**
 
+需要 **Go 1.25+**（见 `go.mod`）。
+
 ```bash
 go build -o easypub ./cmd/easypub
+# Windows:
+go build -o easypub.exe ./cmd/easypub
 ```
 
 或用 Makefile 交叉编译全部平台：
 
 ```bash
-make all      # dist/ 下产出 linux-amd64, linux-arm64, windows-amd64
+make all      # dist/ 下产出 linux/windows/darwin 五平台
 make linux    # 仅 Linux
 make windows  # 仅 Windows
+make darwin   # 仅 macOS
 ```
 
 ## 命令行用法
@@ -96,13 +100,14 @@ make windows  # 仅 Windows
 ## WebUI 用法
 
 ```bash
-./easypub serve -addr :8080
-# 浏览器打开 http://localhost:8080
+./easypub serve
+# 默认仅本机: http://127.0.0.1:8080
+# 局域网暴露(无鉴权，慎用): ./easypub serve -addr 0.0.0.0:8080
 ```
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
-| `-addr` | `:8080` | 监听地址，如 `:8080` 或 `127.0.0.1:9000` |
+| `-addr` | `127.0.0.1:8080` | 监听地址；默认仅本机。公网/局域网请显式指定并注意无鉴权风险 |
 | `-dir`  | 当前工作目录 | 工作目录，用于查找 `config.xml`/`ereaders.xml`，也是默认输出目录 |
 
 WebUI 流程：

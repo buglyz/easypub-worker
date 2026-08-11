@@ -47,6 +47,18 @@ jobs:
           - os: windows
             arch: amd64
             artifact: easypub-windows-amd64.exe
+          - os: darwin
+            arch: amd64
+            artifact: easypub-darwin-amd64
+          - os: darwin
+            arch: arm64
+            artifact: easypub-darwin-arm64
+          - os: darwin
+            arch: amd64
+            artifact: easypub-darwin-amd64
+          - os: darwin
+            arch: arm64
+            artifact: easypub-darwin-arm64
     steps:
       - uses: actions/checkout@v4
 

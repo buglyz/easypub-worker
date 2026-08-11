@@ -193,10 +193,72 @@ func TestConvert_DownloadRoundTrip(t *testing.T) {
 
 func TestDownload_PathTraversalBlocked(t *testing.T) {
 	s := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/download/..%2F..%2Fetc%2Fpasswd", nil)
+	cases := []string{
+		"..%2F..%2Fetc%2Fpasswd",
+		"../../../etc/passwd",
+		"..\\..\\windows\\system32",
+		"C:Windows",
+		"foo.epub", // 不符合命名白名单
+	}
+	for _, name := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/api/download/"+name, nil)
+		rec := httptest.NewRecorder()
+		s.handleDownload(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("跨目录/非法名 %q 应返回 400,得到 %d", name, rec.Code)
+		}
+	}
+}
+
+func TestConvert_IgnoresClientConfigPath(t *testing.T) {
+	s := newTestServer(t)
+	// 即便客户端塞 configPath，服务端也必须忽略，不能读任意路径。
+	body, ct := buildMultipart(t, map[string]string{
+		"splitMode": "0", "fullReg": "", "removeBlank": "true", "autoMark": "true",
+		"title": "书", "author": "a", "lineHeight": "120", "fontSize": "100",
+		"marginTop": "5", "textAlign": "0",
+		"configPath": "/etc/passwd",
+	}, "file", "book.txt", "第1章 开端\n　　正文。\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/convert", body)
+	req.Header.Set("Content-Type", ct)
 	rec := httptest.NewRecorder()
-	s.handleDownload(rec, req)
+	s.handleConvert(rec, req)
+	// 应成功(忽略 configPath)，而非因读 /etc/passwd 失败。
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "outputDir") {
+		t.Error("响应不应泄漏 outputDir 绝对路径")
+	}
+}
+
+func TestConvert_ErrorDoesNotLeakPath(t *testing.T) {
+	s := newTestServer(t)
+	// 空文件字段 → 400，错误文案不含路径分隔符盘符。
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("title", "x")
+	w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/convert", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleConvert(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("跨目录攻击应返回 400,得到 %d", rec.Code)
+		t.Fatalf("status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, ":\\") || strings.Contains(body, "/Users/") || strings.Contains(body, "/home/") {
+		t.Errorf("错误信息泄漏路径: %s", body)
+	}
+}
+
+func TestNew_DefaultBindLocalhost(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(Config{WorkDir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if s.cfg.Addr != "127.0.0.1:8080" {
+		t.Errorf("默认 Addr=%s 期望 127.0.0.1:8080", s.cfg.Addr)
 	}
 }

@@ -1,9 +1,10 @@
 # Makefile for go-easypub
 # 用法:
 #   make            # 默认构建当前平台二进制到 bin/
-#   make all        # 构建 Linux amd64/arm64 + Windows amd64 到 dist/
+#   make all        # 构建 linux/windows/darwin 五平台到 dist/
 #   make linux      # 仅 Linux amd64 + arm64 到 dist/
 #   make windows    # 仅 Windows amd64 到 dist/
+#   make darwin     # 仅 macOS amd64 + arm64 到 dist/
 #   make test       # 运行所有测试
 #   make run        # 构建并执行一次(示例)
 #   make clean      # 清理构建产物
@@ -13,9 +14,9 @@ VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 PKG      := ./cmd/easypub
 
-.PHONY: all linux windows test run webui clean fmt vet
+.PHONY: all linux windows darwin test run webui clean fmt vet
 
-all: linux windows
+all: linux windows darwin
 
 linux:
 	@mkdir -p dist
@@ -28,6 +29,12 @@ windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/easypub-windows-amd64.exe $(PKG)
 	@echo "==> Windows 二进制已构建至 dist/"
 
+darwin:
+	@mkdir -p dist
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/easypub-darwin-amd64 $(PKG)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/easypub-darwin-arm64 $(PKG)
+	@echo "==> Darwin 二进制已构建至 dist/"
+
 bin:
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/easypub $(PKG)
@@ -36,7 +43,7 @@ run: bin
 	./bin/easypub -i testdata/sample.txt -o testdata/sample.epub
 
 webui: bin
-	./bin/easypub serve -addr :8080
+	./bin/easypub serve -addr 127.0.0.1:8080
 
 test:
 	go test ./... -count=1
@@ -48,4 +55,7 @@ vet:
 	go vet ./...
 
 clean:
-	rm -rf bin dist testdata/*.epub .easypub-output
+	rm -rf bin
+	rm -rf dist
+	rm -f testdata/*.epub
+	rm -rf .easypub-output

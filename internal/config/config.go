@@ -11,10 +11,10 @@ import (
 
 // Root 对应 config.xml 的根节点 <EasyPubConfig>。
 type Root struct {
-	XMLVersion     string         `xml:"XMLVersion"`
-	EReadersConfig string         `xml:"eReadersConfig"`
-	MyRegExp       MyRegExp       `xml:"MyRegExp"`
-	Recent         RecentOptions  `xml:"RecentOptions"`
+	XMLVersion     string          `xml:"XMLVersion"`
+	EReadersConfig string          `xml:"eReadersConfig"`
+	MyRegExp       MyRegExp        `xml:"MyRegExp"`
+	Recent         RecentOptions   `xml:"RecentOptions"`
 	Advanced       AdvancedOptions `xml:"AdvancedOptions"`
 }
 
@@ -45,7 +45,7 @@ type RecentOptions struct {
 	Editor             string `xml:"editor"`
 	OutputFolder       string `xml:"outputfolder"`
 	CSSOverwrite       int    `xml:"cssoverwrite"`
-	ForceTextCover    int    `xml:"forcetextcover"`
+	ForceTextCover     int    `xml:"forcetextcover"`
 	AddSpace           int    `xml:"addspace"`
 	SaveCSS            int    `xml:"savecss"`
 	SimpleRegP1        string `xml:"simple_reg_p1"`
@@ -82,13 +82,13 @@ type AdvancedOptions struct {
 	ScreenWidth       int    `xml:"screenwidth"`
 	ScreenHeight      int    `xml:"screenheight"`
 	CoverStyle        int    `xml:"coverstyle"`
-	TOCSpace         int    `xml:"tocspace"`
+	TOCSpace          int    `xml:"tocspace"`
 	ForceEmptyChapter int    `xml:"forceemptychapter"`
 	OutputFormat      int    `xml:"outputformat"`
 	MobiStrip         int    `xml:"mobistrip"`
 	MobiSync          int    `xml:"mobisync"`
-	ASINStyle        int    `xml:"asinstyle"`
-	MobiASIN         string `xml:"mobiasin"`
+	ASINStyle         int    `xml:"asinstyle"`
+	MobiASIN          string `xml:"mobiasin"`
 	KindleGenExe      string `xml:"kindlegenexe"`
 	KindleGenCompress int    `xml:"kindlegencompress"`
 	KindleGenOption   string `xml:"kindlegenoption"`
@@ -134,8 +134,12 @@ func (r *Root) LoadEReaders(dir string) (*EReaders, error) {
 	if name == "" {
 		name = "ereaders.xml"
 	}
-	p := filepath.Join(dir, name)
-	b, err := os.ReadFile(p)
+	return LoadEReadersFile(filepath.Join(dir, name))
+}
+
+// LoadEReadersFile 从指定绝对/相对路径读取 ereaders.xml。
+func LoadEReadersFile(path string) (*EReaders, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

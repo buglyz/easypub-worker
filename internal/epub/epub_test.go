@@ -49,15 +49,15 @@ func TestBuild_ProducesAllExpectedEntries(t *testing.T) {
 	defer r.Close()
 
 	want := map[string]bool{
-		"mimetype":                  false,
-		"META-INF/container.xml":   false,
-		"OEBPS/content.opf":         false,
-		"OEBPS/toc.ncx":             false,
-		"OEBPS/style.css":           false,
-		"OEBPS/cover.html":          false,
-		"OEBPS/book-toc.html":       false,
-		"OEBPS/chapter0.html":       false,
-		"OEBPS/chapter1.html":       false,
+		"mimetype":               false,
+		"META-INF/container.xml": false,
+		"OEBPS/content.opf":      false,
+		"OEBPS/toc.ncx":          false,
+		"OEBPS/style.css":        false,
+		"OEBPS/cover.html":       false,
+		"OEBPS/book-toc.html":    false,
+		"OEBPS/chapter0.html":    false,
+		"OEBPS/chapter1.html":    false,
 	}
 	for _, f := range r.File {
 		if _, ok := want[f.Name]; ok {
