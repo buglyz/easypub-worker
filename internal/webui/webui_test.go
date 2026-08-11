@@ -105,6 +105,58 @@ func TestDetect_ReturnsChapterTitles(t *testing.T) {
 	}
 }
 
+func TestDetect_SplitByCount(t *testing.T) {
+	s := newTestServer(t)
+	// 多行短文本，按字数切成多章。
+	var b strings.Builder
+	for i := 0; i < 40; i++ {
+		b.WriteString("这是一行测试文本内容。\n")
+	}
+	body, ct := buildMultipart(t, map[string]string{
+		"splitMode":   "1",
+		"splitCount":  "50",
+		"autoMark":    "false",
+		"fullReg":     "",
+		"removeBlank": "true",
+	}, "file", "book.txt", b.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/detect", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	s.handleDetect(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"count"`) {
+		t.Fatalf("response 缺 count: %s", rec.Body.String())
+	}
+	// 按字数应切出多于 1 章。
+	if strings.Contains(rec.Body.String(), `"count":1,`) || strings.Contains(rec.Body.String(), `"count": 1`) {
+		t.Fatalf("按字数分章应 >1 章: %s", rec.Body.String())
+	}
+}
+
+func TestDetect_AddSpaceAccepted(t *testing.T) {
+	s := newTestServer(t)
+	body, ct := buildMultipart(t, map[string]string{
+		"splitMode":     "0",
+		"fullReg":       "",
+		"autoMark":      "true",
+		"removeBlank":   "true",
+		"addSpace":      "true",
+		"addSpaceCount": "2",
+	}, "file", "book.txt", "第1章 开端\n　　段落。\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/detect", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	s.handleDetect(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "第1章 开端") {
+		t.Fatalf("response 缺章节: %s", rec.Body.String())
+	}
+}
+
 func TestConvert_ProducesEPUB(t *testing.T) {
 	s := newTestServer(t)
 	content := "序\n　　书名：测试书\n第1章 开端\n　　段落一。\n第2章 发展\n　　段落二。\n"

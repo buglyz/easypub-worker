@@ -2,14 +2,26 @@
   "use strict";
 
   var MAX_FILE_SIZE = 64 * 1024 * 1024;
+  var PREVIEW_LIMIT = 80;
+
   var fileInput = document.getElementById("file");
   var chooseBtn = document.getElementById("chooseBtn");
+  var changeFileBtn = document.getElementById("changeFileBtn");
   var dropzone = document.getElementById("dropzone");
-  var fileinfo = document.getElementById("fileinfo");
+  var dropzoneBody = document.getElementById("dropzoneBody");
+  var fileCard = document.getElementById("fileCard");
+  var fileName = document.getElementById("fileName");
+  var fileMeta = document.getElementById("fileMeta");
   var resetBtn = document.getElementById("resetBtn");
   var chapterMode = document.getElementById("chapterMode");
   var fullRegField = document.getElementById("fullRegField");
   var fullReg = document.getElementById("fullReg");
+  var splitCountField = document.getElementById("splitCountField");
+  var splitCount = document.getElementById("splitCount");
+  var addSpace = document.getElementById("addSpace");
+  var addSpaceCountField = document.getElementById("addSpaceCountField");
+  var addSpaceCount = document.getElementById("addSpaceCount");
+  var removeBlank = document.getElementById("removeBlank");
   var detectBtn = document.getElementById("detectBtn");
   var convertBtn = document.getElementById("convertBtn");
   var preview = document.getElementById("preview");
@@ -18,12 +30,17 @@
   var serviceState = document.getElementById("serviceState");
   var chapterCount = document.getElementById("chapterCount");
   var result = document.getElementById("result");
+  var resultKicker = document.getElementById("resultKicker");
   var resultTitle = document.getElementById("resultTitle");
   var resultMeta = document.getElementById("resultMeta");
   var resultActions = document.getElementById("resultActions");
+  var summaryPlaceholder = document.getElementById("summaryPlaceholder");
+  var fileSummary = document.getElementById("fileSummary");
+
   var selectedFile = null;
   var dragDepth = 0;
   var busy = false;
+  var previewStale = false;
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + " B";
@@ -31,13 +48,16 @@
     return (bytes / 1048576).toFixed(1) + " MB";
   }
 
-  function setServiceState(text) {
+  function setServiceState(text, tone) {
     serviceState.textContent = text;
+    serviceState.setAttribute("data-tone", tone || "ready");
   }
 
   function setFlow(name, state, detail) {
     var item = document.querySelector('[data-flow="' + name + '"]');
-    var detailNode = document.getElementById("flow" + name.charAt(0).toUpperCase() + name.slice(1));
+    var detailNode = document.getElementById(
+      "flow" + name.charAt(0).toUpperCase() + name.slice(1)
+    );
     if (!item) return;
     item.classList.remove("active", "done");
     if (state) item.classList.add(state);
@@ -54,8 +74,10 @@
 
   function clearResult() {
     result.hidden = true;
+    result.classList.remove("is-error");
     resultActions.textContent = "";
-    resultTitle.textContent = "你的电子书已准备好";
+    resultKicker.textContent = "转换完成";
+    resultTitle.textContent = "电子书已准备好";
     resultMeta.textContent = "-";
   }
 
@@ -64,24 +86,32 @@
     var empty = document.createElement("div");
     empty.className = "empty-state";
     empty.textContent = selectedFile
-      ? "点击“识别章节”查看目录预览。"
-      : "选择文件后点击“识别章节”，这里会显示目录预览。";
+      ? "点击「识别章节」查看目录预览。"
+      : "选择文件后点击「识别章节」，这里会显示目录预览。";
     preview.appendChild(empty);
     chapterCount.textContent = "0 章";
     document.getElementById("summaryEncoding").textContent = "待识别";
-    setFlow("chapter", "", "尚未识别");
+    previewStale = false;
+    setFlow("chapter", selectedFile ? "active" : "", selectedFile ? "等待识别" : "尚未识别");
+  }
+
+  function markPreviewStale() {
+    if (!selectedFile || busy) return;
+    if (preview.querySelector(".chapter-list")) {
+      previewStale = true;
+      setFlow("chapter", "active", "参数已变更，建议重新识别");
+      progress.textContent = "分章参数已修改，建议重新识别后再转换。";
+    }
   }
 
   function updateSummary(file) {
-    var placeholder = document.getElementById("summaryPlaceholder");
-    var summary = document.getElementById("fileSummary");
     if (!file) {
-      placeholder.hidden = false;
-      summary.hidden = true;
+      summaryPlaceholder.hidden = false;
+      fileSummary.hidden = true;
       return;
     }
-    placeholder.hidden = true;
-    summary.hidden = false;
+    summaryPlaceholder.hidden = true;
+    fileSummary.hidden = false;
     document.getElementById("summaryName").textContent = file.name;
     document.getElementById("summarySize").textContent = formatSize(file.size);
   }
@@ -100,24 +130,29 @@
       setError("文件超过 64 MB 限制，请先拆分文本。");
       return;
     }
+
     selectedFile = file;
     dropzone.classList.add("has-file");
-    fileinfo.hidden = false;
-    fileinfo.textContent = file.name + " · " + formatSize(file.size);
+    dropzoneBody.hidden = true;
+    fileCard.hidden = false;
+    fileName.textContent = file.name;
+    fileMeta.textContent = formatSize(file.size);
     detectBtn.disabled = false;
     convertBtn.disabled = false;
     actionTitle.textContent = "文件已就绪";
     progress.textContent = "可以识别章节或直接开始转换。";
-    setServiceState("文件已选择");
+    setServiceState("文件已选择", "ready");
     setFlow("source", "done", file.name);
     setFlow("chapter", "active", "等待识别");
+    setFlow("layout", "", "使用默认参数");
+    setFlow("convert", "", "等待转换");
     updateSummary(file);
     clearPreview();
     clearResult();
   }
 
   function setError(message) {
-    setServiceState("需要处理");
+    setServiceState("需要处理", "error");
     actionTitle.textContent = "操作未完成";
     progress.textContent = message;
   }
@@ -127,6 +162,14 @@
     detectBtn.disabled = value || !selectedFile;
     convertBtn.disabled = value || !selectedFile;
     resetBtn.disabled = value;
+    chooseBtn.disabled = value;
+    if (changeFileBtn) changeFileBtn.disabled = value;
+    chapterMode.disabled = value;
+    fullReg.disabled = value || chapterMode.value !== "custom";
+    splitCount.disabled = value;
+    addSpace.disabled = value;
+    addSpaceCount.disabled = value;
+    removeBlank.disabled = value;
     if (message) progress.textContent = message;
   }
 
@@ -136,10 +179,32 @@
     form.append("file", selectedFile);
     form.append("title", document.getElementById("title").value.trim());
     form.append("author", document.getElementById("author").value.trim());
-    form.append("splitMode", mode === "whole" ? "2" : "0");
-    form.append("fullReg", mode === "custom" ? fullReg.value.trim() : "");
-    form.append("autoMark", mode === "auto" ? "true" : "false");
-    form.append("removeBlank", document.getElementById("removeBlank").checked ? "true" : "false");
+
+    if (mode === "whole") {
+      form.append("splitMode", "2");
+      form.append("autoMark", "false");
+      form.append("fullReg", "");
+      form.append("splitCount", "0");
+    } else if (mode === "count") {
+      form.append("splitMode", "1");
+      form.append("autoMark", "false");
+      form.append("fullReg", "");
+      form.append("splitCount", String(splitCount.value || "10000"));
+    } else if (mode === "custom") {
+      form.append("splitMode", "0");
+      form.append("autoMark", "false");
+      form.append("fullReg", fullReg.value.trim());
+      form.append("splitCount", "0");
+    } else {
+      form.append("splitMode", "0");
+      form.append("autoMark", "true");
+      form.append("fullReg", "");
+      form.append("splitCount", "0");
+    }
+
+    form.append("removeBlank", removeBlank.checked ? "true" : "false");
+    form.append("addSpace", addSpace.checked ? "true" : "false");
+    form.append("addSpaceCount", addSpace.checked ? String(addSpaceCount.value || "1") : "0");
     form.append("lineHeight", document.getElementById("lineHeight").value);
     form.append("fontSize", document.getElementById("fontSize").value);
     form.append("marginTop", document.getElementById("marginTop").value);
@@ -179,66 +244,104 @@
     var list = document.createElement("ol");
     list.className = "chapter-list";
     var titles = Array.isArray(data.titles) ? data.titles : [];
-    titles.slice(0, 80).forEach(function (chapterTitle) {
+    titles.slice(0, PREVIEW_LIMIT).forEach(function (chapterTitle) {
       var item = document.createElement("li");
       item.textContent = chapterTitle || "(无标题章节)";
       list.appendChild(item);
     });
-    if (titles.length > 80) {
+    if (titles.length > PREVIEW_LIMIT) {
       var more = document.createElement("li");
-      more.textContent = "其余 " + (titles.length - 80) + " 章未展开";
-      more.style.color = "var(--muted)";
+      more.className = "more";
+      more.textContent = "其余 " + (titles.length - PREVIEW_LIMIT) + " 章未展开";
       list.appendChild(more);
     }
     preview.appendChild(list);
+
     chapterCount.textContent = (data.count || 0) + " 章";
     document.getElementById("summaryEncoding").textContent = data.encoding || "-";
+    previewStale = false;
     setFlow("chapter", "done", "已识别 " + (data.count || 0) + " 章");
     setFlow("layout", "active", "使用当前参数");
   }
 
-  function createDownloadLink(label, url) {
+  function createDownloadLink(label, url, secondary) {
     var link = document.createElement("a");
-    link.className = "download-link";
+    link.className = secondary ? "download-link secondary" : "download-link";
     link.href = url;
     link.setAttribute("download", "");
-    link.textContent = label;
+    var text = document.createElement("span");
+    text.textContent = label;
     var arrow = document.createElement("span");
-    arrow.textContent = "下载 →";
+    arrow.textContent = "下载";
+    link.appendChild(text);
     link.appendChild(arrow);
     return link;
   }
 
   function renderResult(data) {
     result.hidden = false;
-    resultTitle.textContent = "你的电子书已准备好";
+    result.classList.remove("is-error");
+    resultKicker.textContent = "转换完成";
+    resultTitle.textContent = "电子书已准备好";
     resultMeta.textContent = (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "-");
     resultActions.textContent = "";
     if (data.download) {
-      resultActions.appendChild(createDownloadLink("EPUB 文件", data.download));
+      resultActions.appendChild(createDownloadLink("EPUB 文件", data.download, false));
     }
     if (data.mobi) {
-      resultActions.appendChild(createDownloadLink(
-        "MOBI 文件",
-        "/api/download/" + encodeURIComponent(data.mobi)
-      ));
+      resultActions.appendChild(
+        createDownloadLink(
+          "MOBI 文件",
+          "/api/download/" + encodeURIComponent(data.mobi),
+          true
+        )
+      );
     }
     setFlow("convert", "done", "文件已生成");
-    setServiceState("转换完成");
+    setServiceState("转换完成", "done");
+  }
+
+  function renderConvertError(message) {
+    result.hidden = false;
+    result.classList.add("is-error");
+    resultKicker.textContent = "转换失败";
+    resultTitle.textContent = "未能生成电子书";
+    resultMeta.textContent = "请检查文件与分章参数后重试。";
+    resultActions.textContent = "";
+    var error = document.createElement("div");
+    error.className = "error-message";
+    error.textContent = message;
+    resultActions.appendChild(error);
   }
 
   function detectChapters() {
     if (!selectedFile || busy) return;
+    if (chapterMode.value === "custom" && !fullReg.value.trim()) {
+      setError("自定义正则不能为空。");
+      showMessage(preview, "请先填写章节正则。", true);
+      return;
+    }
+    if (chapterMode.value === "count") {
+      var count = parseInt(splitCount.value, 10);
+      if (!count || count < 100) {
+        setError("按字数分章时，每章字数至少为 100。");
+        showMessage(preview, "请填写有效的每章字数。", true);
+        return;
+      }
+    }
+
     setBusy(true, "正在读取文本并识别章节...");
-    setServiceState("正在识别");
+    setServiceState("正在识别", "busy");
     setFlow("chapter", "active", "识别中");
     showMessage(preview, "正在识别章节，请稍候。", false);
+
     fetch("/api/detect", { method: "POST", body: buildFormData() })
       .then(handleResponse)
       .then(function (data) {
         renderPreview(data);
         actionTitle.textContent = "章节已确认";
         progress.textContent = "可以调整排版，或直接开始转换。";
+        setServiceState("识别完成", "ready");
       })
       .catch(function (err) {
         setFlow("chapter", "active", "识别失败");
@@ -247,38 +350,69 @@
       })
       .then(function () {
         setBusy(false);
+        updateChapterMode();
       });
   }
 
   function convertBook() {
     if (!selectedFile || busy) return;
+    if (chapterMode.value === "custom" && !fullReg.value.trim()) {
+      setError("自定义正则不能为空。");
+      return;
+    }
+    if (chapterMode.value === "count") {
+      var count = parseInt(splitCount.value, 10);
+      if (!count || count < 100) {
+        setError("按字数分章时，每章字数至少为 100。");
+        return;
+      }
+    }
+
     setBusy(true, "正在生成 EPUB，请稍候...");
-    setServiceState("正在转换");
+    setServiceState("正在转换", "busy");
     setFlow("layout", "done", "参数已提交");
     setFlow("convert", "active", "生成中");
     clearResult();
+
     fetch("/api/convert", { method: "POST", body: buildFormData() })
       .then(handleResponse)
       .then(function (data) {
         renderResult(data);
         actionTitle.textContent = "转换完成";
-        progress.textContent = "点击右侧下载文件。";
+        progress.textContent = "可在右侧下载生成的文件。";
       })
       .catch(function (err) {
         setFlow("convert", "active", "生成失败");
-        setServiceState("转换失败");
+        setServiceState("转换失败", "error");
         actionTitle.textContent = "转换未完成";
         progress.textContent = err.message;
-        result.hidden = false;
-        resultActions.textContent = "";
-        var error = document.createElement("div");
-        error.className = "error-message";
-        error.textContent = "转换失败：" + err.message;
-        resultActions.appendChild(error);
+        renderConvertError(err.message);
       })
       .then(function () {
         setBusy(false);
+        updateChapterMode();
       });
+  }
+
+  function updateChapterMode() {
+    var mode = chapterMode.value;
+    var isCustom = mode === "custom";
+    var isCount = mode === "count";
+    var isWhole = mode === "whole";
+
+    fullRegField.hidden = isCount || isWhole;
+    splitCountField.hidden = !isCount;
+    fullReg.disabled = busy || !isCustom;
+
+    if (isCustom) {
+      fullReg.placeholder = "例如：^\\s*第\\s*[0-9]+\\s*章";
+    } else if (!isCount && !isWhole) {
+      fullReg.placeholder = "切换为自定义正则后填写";
+    }
+  }
+
+  function updateAddSpace() {
+    addSpaceCountField.hidden = !addSpace.checked;
   }
 
   function resetAll() {
@@ -286,13 +420,18 @@
     selectedFile = null;
     fileInput.value = "";
     dropzone.classList.remove("has-file", "dragover");
-    fileinfo.hidden = true;
-    fileinfo.textContent = "";
+    dropzoneBody.hidden = false;
+    fileCard.hidden = true;
+    fileName.textContent = "-";
+    fileMeta.textContent = "-";
     document.getElementById("title").value = "";
     document.getElementById("author").value = "";
     chapterMode.value = "auto";
     fullReg.value = "";
-    document.getElementById("removeBlank").checked = true;
+    splitCount.value = "10000";
+    removeBlank.checked = true;
+    addSpace.checked = false;
+    addSpaceCount.value = "1";
     document.getElementById("lineHeight").value = "120";
     document.getElementById("fontSize").value = "100";
     document.getElementById("marginTop").value = "5";
@@ -300,6 +439,7 @@
     document.getElementById("textAlign").value = "0";
     document.getElementById("enableMobi").checked = false;
     updateChapterMode();
+    updateAddSpace();
     updateSummary(null);
     clearPreview();
     clearResult();
@@ -307,31 +447,26 @@
     convertBtn.disabled = true;
     actionTitle.textContent = "准备开始";
     progress.textContent = "请选择一个 TXT 文件。";
-    setServiceState("服务就绪");
+    setServiceState("服务就绪", "ready");
     setFlow("source", "active", "等待文件");
     setFlow("chapter", "", "尚未识别");
     setFlow("layout", "", "使用默认参数");
     setFlow("convert", "", "等待转换");
   }
 
-  function updateChapterMode() {
-    var custom = chapterMode.value === "custom";
-    fullRegField.hidden = chapterMode.value === "whole";
-    fullReg.disabled = !custom;
-    if (custom) {
-      fullReg.placeholder = "例如：^\\s*第\\s*[0-9]+\\s*章";
-    } else {
-      fullReg.placeholder = "切换为自定义正则后填写";
-    }
+  function openFilePicker(event) {
+    if (event) event.stopPropagation();
+    if (!busy) fileInput.click();
   }
 
-  dropzone.addEventListener("click", function () {
-    if (!busy) fileInput.click();
+  dropzone.addEventListener("click", function (event) {
+    if (busy) return;
+    if (event.target.closest("button")) return;
+    fileInput.click();
   });
-  chooseBtn.addEventListener("click", function (event) {
-    event.stopPropagation();
-    if (!busy) fileInput.click();
-  });
+  chooseBtn.addEventListener("click", openFilePicker);
+  if (changeFileBtn) changeFileBtn.addEventListener("click", openFilePicker);
+
   dropzone.addEventListener("keydown", function (event) {
     if ((event.key === "Enter" || event.key === " ") && !busy) {
       event.preventDefault();
@@ -358,15 +493,31 @@
     event.preventDefault();
     dragDepth = 0;
     dropzone.classList.remove("dragover");
+    if (busy) return;
     if (event.dataTransfer.files.length) setFile(event.dataTransfer.files[0]);
   });
   fileInput.addEventListener("change", function () {
     if (fileInput.files.length) setFile(fileInput.files[0]);
   });
-  chapterMode.addEventListener("change", updateChapterMode);
+
+  chapterMode.addEventListener("change", function () {
+    updateChapterMode();
+    markPreviewStale();
+  });
+  fullReg.addEventListener("input", markPreviewStale);
+  splitCount.addEventListener("input", markPreviewStale);
+  removeBlank.addEventListener("change", markPreviewStale);
+  addSpace.addEventListener("change", function () {
+    updateAddSpace();
+    markPreviewStale();
+  });
+  addSpaceCount.addEventListener("input", markPreviewStale);
+
   detectBtn.addEventListener("click", detectChapters);
   convertBtn.addEventListener("click", convertBook);
   resetBtn.addEventListener("click", resetAll);
+
   updateChapterMode();
+  updateAddSpace();
   clearPreview();
 })();
