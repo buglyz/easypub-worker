@@ -6,6 +6,7 @@ dist/
 testdata/*.epub
 testdata/*.mobi
 .easypub-output/
+.codex/
 data/
 .idea/
 .vscode/

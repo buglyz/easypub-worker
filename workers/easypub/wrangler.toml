@@ -1,0 +1,38 @@
+name = "easypub"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 静态前端：index.html / app.js / style.css（_headers 提供安全头）
+[assets]
+directory = "./src/static"
+binding = "ASSETS"
+# SPA 不需要；API 由 Worker 处理
+not_found_handling = "none"
+run_worker_first = ["/api/*"]
+
+# R2：临时 TXT 与生成的 EPUB
+# 本地开发（wrangler dev）默认用 Miniflare 本地模拟，无需先建桶；
+# 生产需先建桶并配置 lifecycle（24h 过期）：
+#   npx wrangler r2 bucket create easypub
+#   npx wrangler r2 bucket lifecycle add easypub uploads-expire uploads/ --expire-days 1
+#   npx wrangler r2 bucket lifecycle add easypub outputs-expire outputs/ --expire-days 1
+#   npx wrangler r2 bucket lifecycle add easypub jobs-expire jobs/ --expire-days 1
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "easypub"
+
+[vars]
+# 同步转换阈值（字节）。超过则走异步 job（waitUntil）+ 前端轮询 /api/jobs/:id
+# 实测（Node 24 本机）：14MB/1593 章 UTF-8 → EPUB 约 1.9s；20MB 阈值内同步稳定，
+# 更大文件或保守场景建议走异步，避免 Worker 付费 CPU 30s 上限。
+SYNC_MAX_BYTES = "20971520"
+# 上传硬上限（字节），默认 32MB；Worker 请求体受平台限制（约 100MB）
+MAX_UPLOAD_BYTES = "33554432"
+# 产物保留提示（秒），实际过期请在 R2 配置 lifecycle 规则
+OUTPUT_TTL_SECONDS = "86400"
+# 可选：设置后要求请求头 X-EasyPub-Token 匹配
+# ACCESS_TOKEN = ""
+
+# 生产可取消注释并绑定自定义域
+# routes = [{ pattern = "easypub.example.com/*", zone_name = "example.com" }]

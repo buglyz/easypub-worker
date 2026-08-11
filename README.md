@@ -163,6 +163,24 @@ make docker-run
 镜像由 GitHub Actions（`.github/workflows/docker.yml`）构建并推送到 `ghcr.io/buglyz/easypub`，支持 `linux/amd64` 与 `linux/arm64`。
 
 > 注意：WebUI **无鉴权**。公网暴露请自行加反向代理与访问控制。容器内默认非 root 运行；MOBI 仍依赖宿主机/镜像内是否提供 `kindlegen`（官方镜像未内置）。
+
+## Cloudflare Workers 部署
+
+另有一个 **仅 EPUB** 的 Cloudflare Workers + R2 部署形态（无 MOBI / kindlegen），适合无服务器公网托管：
+
+```bash
+cd workers/easypub
+npm install
+npm run dev        # wrangler dev 本地调试
+npx wrangler deploy
+```
+
+- 创建 R2 桶与 24h lifecycle：见 [`workers/easypub/README.md`](workers/easypub/README.md)
+- 公网部署强烈建议设置 `ACCESS_TOKEN` 或 Cloudflare Access
+- 实测：14MB / 1593 章 UTF-8 → EPUB 约 1.9s；大文件自动走异步任务
+
+Go CLI / Docker 主路径不受影响，二者并行可用。
+
 ## 配置文件
 
 可直接沿用原 EasyPub 的 `config.xml` / `ereaders.xml`。示例见 [`configs/`](configs/)。
@@ -219,6 +237,7 @@ go-easypub/
 ├── configs/             原版兼容的示例 config.xml / ereaders.xml
 ├── css/                 提取自原工具的样例 style.css
 ├── testdata/            测试样例 TXT
+├── workers/easypub/     Cloudflare Workers + R2 部署（仅 EPUB，详见其 README）
 ├── Dockerfile           多阶段构建，默认入口为 WebUI
 ├── docker-compose.yml   一键启动 WebUI
 ├── Makefile             交叉编译与常用任务
