@@ -9,12 +9,14 @@
 #   make run        # 构建并执行一次(示例)
 #   make clean      # 清理构建产物
 #   make webui      # 仅构建并启动 WebUI(本地测试)
+#   make docker     # 构建本地 Docker 镜像（默认入口为 WebUI）
+#   make docker-run # 运行本地 Docker WebUI
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 PKG      := ./cmd/easypub
 
-.PHONY: all linux windows darwin test run webui clean fmt vet
+.PHONY: all linux windows darwin test run webui docker docker-run clean fmt vet
 
 all: linux windows darwin
 
@@ -45,6 +47,13 @@ run: bin
 webui: bin
 	./bin/easypub serve -addr 127.0.0.1:8080
 
+# 本地构建 Docker 镜像（默认启动 WebUI）
+docker:
+	docker build --build-arg VERSION=$(VERSION) -t easypub:$(VERSION) -t easypub:local .
+
+# 运行本地镜像 WebUI: http://127.0.0.1:8080
+docker-run:
+	docker run --rm -p 8080:8080 -v "$(CURDIR)/.easypub-output:/data" easypub:local
 test:
 	go test ./... -count=1
 

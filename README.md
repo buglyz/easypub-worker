@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/buglyz/easypub/actions/workflows/ci.yml/badge.svg)
 ![Release](https://github.com/buglyz/easypub/actions/workflows/release.yml/badge.svg)
-
+![Docker](https://github.com/buglyz/easypub/actions/workflows/docker.yml/badge.svg)
 将 TXT 转换为 EPUB 的工具，用 Go 重写自 [EasyPub](http://sourceforge.net/projects/easypub/)（v1.50）。
 目标：与原工具生成的 EPUB 在结构与样式上**字节级对齐**，支持 Linux/Windows 跨平台、零运行时依赖、单文件分发，并自带 WebUI。
 
@@ -11,9 +11,10 @@
 - TXT → EPUB 2.0
   - `mimetype`（不压缩）+ `META-INF/container.xml`
   - `OEBPS/` 下完整生成 `content.opf`、`toc.ncx`、`style.css`、`cover.html`、`book-toc.html`、`chapterN.html`
-- **两种使用形态**：
+- **三种使用形态**：
   - 命令行（CLI）：单文件二进制，脚本/批量场景
   - WebUI：`easypub serve`，浏览器里拖拽上传、配参、识别章节、生成下载
+  - Docker：镜像默认启动 WebUI（`0.0.0.0:8080`）
 - 自动识别章节标题（中文小说"第N章"、"序"、"楔子"、"番外"等，英文 `Chapter N`）
 - 支持三类正则来源：完整正则 / 简易三段式正则 / 预定义附加正则
 - 编码自动检测：UTF-8(BOM/无 BOM)、UTF-16(BE/LE BOM)、GBK、GB18030、Big5
@@ -120,6 +121,48 @@ WebUI 流程：
 
 生成的文件默认保存到 `<工作目录>/.easypub-output/`。
 
+## Docker 用法
+
+镜像默认启动 **WebUI**，监听 `0.0.0.0:8080`。工作目录为 `/data`（可挂载以持久化输出与 `config.xml`）。
+
+**拉取并运行（GHCR）：**
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/buglyz/easypub:edge
+# 浏览器打开 http://127.0.0.1:8080
+```
+
+**挂载数据目录：**
+
+```bash
+mkdir -p data
+docker run --rm -p 8080:8080 -v "$PWD/data:/data" ghcr.io/buglyz/easypub:edge
+```
+
+**docker compose：**
+
+```bash
+docker compose up -d --build
+```
+
+**本地构建：**
+
+```bash
+make docker          # 或 docker build -t easypub:local .
+make docker-run
+```
+
+**镜像标签：**
+
+| 标签 | 说明 |
+|---|---|
+| `edge` | `master` 分支最新构建 |
+| `latest` / `x.y.z` | 打 `v*` tag 时由 Release 同步推送 |
+| `sha-xxxxxxx` | 对应提交短 SHA |
+
+镜像由 GitHub Actions（`.github/workflows/docker.yml`）构建并推送到 `ghcr.io/buglyz/easypub`，支持 `linux/amd64` 与 `linux/arm64`。
+
+> 注意：WebUI **无鉴权**。公网暴露请自行加反向代理与访问控制。容器内默认非 root 运行；MOBI 仍依赖宿主机/镜像内是否提供 `kindlegen`（官方镜像未内置）。
 ## 配置文件
 
 可直接沿用原 EasyPub 的 `config.xml` / `ereaders.xml`。示例见 [`configs/`](configs/)。
@@ -176,6 +219,8 @@ go-easypub/
 ├── configs/             原版兼容的示例 config.xml / ereaders.xml
 ├── css/                 提取自原工具的样例 style.css
 ├── testdata/            测试样例 TXT
+├── Dockerfile           多阶段构建，默认入口为 WebUI
+├── docker-compose.yml   一键启动 WebUI
 ├── Makefile             交叉编译与常用任务
 └── build.sh             POSIX shell 构建脚本（同 Makefile 逻辑的备份）
 ```
@@ -190,9 +235,9 @@ make test    # 或 go test ./...
 
 ## 持续集成
 
-- **CI**（`.github/workflows/ci.yml`）：每次 push 到 `master` 或 PR 触发，跑 `go vet` + `go test` + 三平台构建冒烟。
+- **CI**（`.github/workflows/ci.yml`）：每次 push 到 `master` 或 PR 触发，跑 `go vet` + `go test` + 多平台构建冒烟。
 - **Release**（`.github/workflows/release.yml`）：打 `v*` tag 触发，跑测试后构建 linux/windows/darwin 五个二进制 + sha256 校验和，自动创建 GitHub Release 并上传。
-
+- **Docker**（`.github/workflows/docker.yml`）：`master` / `v*` tag / 手动触发时构建 `linux/amd64` + `linux/arm64` 镜像并推送到 GHCR；PR 仅构建不推送。
 发版示例：
 
 ```bash
