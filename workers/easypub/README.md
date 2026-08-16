@@ -35,7 +35,7 @@ workers/easypub/
 
 ## 本地开发
 
-要求：Node 18+，已安装 `wrangler`（本项目 devDependency）。
+要求：Node.js ≥ 22，已安装 `wrangler`（本项目 devDependency）。
 
 ```bash
 cd workers/easypub
@@ -48,11 +48,18 @@ npm run dev        # wrangler dev，默认 http://localhost:8787
 测试与类型检查：
 
 ```bash
-npm test           # vitest run（单元 + 集成）
+npm test           # vitest run（157 测试，单元 + 集成）
 npm run typecheck  # tsc --noEmit
+npm run lint       # 同 typecheck（tsc --noEmit）
 ```
 
-集成测试用内存 Map 桩点模拟 R2，覆盖：detect → convert → download、非法 download id 400、无 MOBI 字段。
+集成测试用内存 Map 桩点模拟 R2，覆盖：
+
+- detect → convert（同步）→ download
+- detect → convert（异步 job）→ 轮询 /api/jobs/:id 直到 done
+- download Range 请求 206
+- 非法 download id 400、不存在但合法的 id 404、MOBI 路径 400
+- ACCESS_TOKEN 启用后无 token / 错 token / 正确 token 的 401 / 200
 
 ## 部署
 
@@ -72,15 +79,18 @@ npx wrangler r2 bucket lifecycle add easypub jobs-expire jobs/ --expire-days 1
 
 `wrangler.toml` 中 `bucket_name = "easypub"` 需与上面创建的桶名一致；R2 不支持对象级 TTL，过期完全由 lifecycle 规则负责。
 
-### 3. 配置 ACCESS_TOKEN（可选，强烈建议公网部署启用）
+### 3. 配置 ACCESS_TOKEN（可选，**强烈建议公网部署启用**）
 
-在 `wrangler.toml` 的 `[vars]` 中取消注释并设置：
+**推荐用 secret，不要写进 `wrangler.toml`**（明文会进 git 历史）：
 
-```toml
-ACCESS_TOKEN = "换成随机长字符串"
+```bash
+npx wrangler secret put ACCESS_TOKEN
+# 提示输入时粘贴一个随机长字符串，例如 openssl rand -hex 32
 ```
 
-启用后所有 `/api/*` 请求都要求请求头 `X-EasyPub-Token: <值>`，前端通过 URL 参数或部署时注入。更完整的方案：把 Worker 放在 Access / 自定义域后并加认证规则，见下文安全章节。
+启用后所有 `/api/*` 请求都要求请求头 `X-EasyPub-Token` 匹配，前端通过 URL 参数 `?token=<值>` 注入后自动从地址栏抹掉。
+
+更彻底的方案：把 Worker 放在 Cloudflare Access 后面，零信任登录后再访问。Token + Access 双重保护是公网部署的最佳实践。
 
 ### 4. 发布
 
@@ -104,8 +114,8 @@ npx wrangler deployments list          # 查看当前部署
 
 - `POST /api/detect`：multipart 上传 `file` + 切分参数 → `{ count, titles[], encoding }`（空标题章不进 `titles`，`count` 只计有标题章）
 - `POST /api/convert`：multipart 上传 → 小文件同步返回 `{ async:false, download, epubName, chapters, encoding }`；大文件返回 `{ async:true, jobId, job }`
-- `GET /api/jobs/:id`：异步任务状态 `{ status: pending|running|done|error, ... }`，`done` 时含 `download`
-- `GET /api/download/:id.epub?name=展示名`：产物下载，`id` 必须是服务端生成的 jobId（白名单 `YYYYMMDD-HHMMSS-8hex` 或 32 位 hex），非法返回 400
+- `GET /api/jobs/:id`：异步任务状态 `{ status: pending|running|done|error, ... }`，`done` 时含 `download`；`running` 超 90s 自动标 error（防 waitUntil 崩溃后前端死循环）
+- `GET /api/download/:id.epub?name=展示名`：产物下载，`id` 必须是服务端生成的 jobId（白名单 `YYYYMMDD-HHMMSS-8hex` 旧格式 / `YYYYMMDD-HHMMSS-32hex` 新格式 / 32 位 hex），非法返回 400；支持 Range 请求返回 206
 
 表单字段（对齐 Go WebUI）：`title`、`author`、`splitMode`(0正则/1按字数/2整本)、`splitCount`、`fullReg`、`autoMark`、`removeBlank`、`addSpace`、`addSpaceCount`、`lineHeight`、`fontSize`、`marginTop`、`textAlign`、`indent`。**不接受** `configPath` / `enableMobi`。
 
@@ -126,12 +136,69 @@ npx wrangler deployments list          # 查看当前部署
 
 ## 安全说明
 
-- **公网无鉴权有风险**：默认任何能访问该 Worker URL 的人都能用你的 R2 额度转换/下载。公网部署务必启用 `ACCESS_TOKEN` 或 Cloudflare Access。
+- **公网无鉴权有风险**：默认任何能访问该 Worker URL 的人都能用你的 R2 额度转换/下载。公网部署务必启用 `ACCESS_TOKEN`（用 `wrangler secret put`）或 Cloudflare Access。
+- `ACCESS_TOKEN` 比较使用常时算法（手写 timingSafeCompare），防时序侧信道。
+- jobId 随机段为 128 bit 熵（16 字节 hex），封堵枚举扫描；旧格式 8hex ID 仍兼容识别但不再生成。
+- 入口预校验 `Content-Length`，防止虚标小 CL 实流式大 body 把 Worker 内存吃满。
 - 下载路径只接受服务端生成的 jobId 白名单格式，`?name=` 仅用于 `Content-Disposition` 展示名，不参与对象寻址。
 - 展示名净化：去路径成分、非法字符替换为 `_`、强制 `.epub` 扩展名。
 - 不信任客户端提供的任何路径/configPath。
-- 静态资源与 API 均带安全头（`X-Content-Type-Options`、`X-Frame-Options`、CSP 等，见 `src/lib/form.ts` 与 `src/static/_headers`）。
+- 异步任务 stale 检测：`running` 超 90s 自动标记 `error`，避免 waitUntil 崩溃后前端轮询永不收敛。
+- 静态资源与 API 均带安全头：`X-Content-Type-Options`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Strict-Transport-Security`、`Permissions-Policy`、CSP（含 `base-uri 'none'` / `form-action 'self'` / `object-src 'none'` / `frame-ancestors 'none'`）。见 `src/lib/form.ts` 与 `src/static/_headers`。
+- 前端下载链接做同源校验，防后端异常返回外部 URL 被用作开放重定向/钓鱼。
 
 ## 与 Go 版的关系
 
 Workers 版是**新增并行部署形态**，不替换 Go CLI/Docker。两者共用同一份章节识别/EPUB 打包语义（Worker 端为 TS 移植），满足同一份测试夹具；Go 版继续维护其字节级对齐目标。
+
+Workers 版的关键对齐项：
+
+- `escapeText` 双引号转 `&#34;`（对齐 Go `html.EscapeString`）
+- EPUB zip 所有条目 `mtime` 固定为 `1980-01-01 UTC`，保证同输入产出字节级一致
+- XHTML 文件 BOM + CRLF
+- `mimetype` 文件 store（level 0）且为 zip 第一项
+
+## 运维与监控
+
+### 查看 Worker 日志
+
+```bash
+npx wrangler tail easypub
+```
+
+实时打印 `console.error` 输出（如异步任务失败、内部错误堆栈）。
+
+### 查看 R2 用量
+
+Cloudflare Dashboard → R2 → easypub → Metrics，监控：
+
+- Class A 操作（PUT/DELETE/GET 列出）：免费 1M / 月
+- Class B 操作（GET 对象）：免费 10M / 月
+- 存储用量：免费 10GB
+
+### 手动清理对象（lifecycle 失效时）
+
+```bash
+# 列出 uploads/ 下对象
+npx wrangler r2 object list easypub --prefix "uploads/"
+
+# 删除单个
+npx wrangler r2 object delete easypub uploads/<jobId>.txt
+```
+
+### 更新 ACCESS_TOKEN
+
+```bash
+npx wrangler secret put ACCESS_TOKEN
+# 重新输入新值即可，无需 redeploy
+```
+
+### 升级版本
+
+```bash
+git pull origin cloudflare
+cd workers/easypub
+npm install
+npm test                # 跑测试确认 OK
+npx wrangler deploy
+```
