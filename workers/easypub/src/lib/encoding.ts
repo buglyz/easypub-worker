@@ -50,6 +50,8 @@ function tryCandidates(bytes: Uint8Array): { text: string; enc: string } | null 
 }
 
 export function detectAndDecode(bytes: Uint8Array): { text: string; encoding: string } {
+  // 注意：UTF-32 BOM（FF FE 00 00 / 00 00 FE FF）会被误判为 UTF-16，
+  // 与 Go 版同此缺陷，保持"语义对齐"；如需修复，在此处先做 UTF-32 探测
   if (hasPrefix(bytes, [0xff, 0xfe])) {
     const s = tryDecodeLabel(bytes.subarray(2), "utf-16le");
     if (s == null) throw new Error("UTF-16LE 解码失败");
@@ -86,7 +88,7 @@ export function escapeText(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/"/g, "&#34;")
     .replace(/'/g, "&#39;");
 }
 

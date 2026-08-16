@@ -1,6 +1,7 @@
 /** EPUB 2.0 生成，对齐 internal/epub */
 
 import { zipSync, strToU8 } from "fflate";
+import type { Zippable, ZipOptions } from "fflate";
 import type { Chapter } from "./txt-parse";
 import { escapeForXmlAttr, escapeText } from "./encoding";
 
@@ -175,6 +176,10 @@ function toCrlf(s: string): string {
 function withBom(s: string): Uint8Array {
   const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
   const body = strToU8(toCrlf(s));
+  // 防御：如 s 已带 UTF-8 BOM，不再追加（对齐 Go if !bytes.HasPrefix(content, bom)）
+  if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) {
+    return body;
+  }
   const out = new Uint8Array(bom.length + body.length);
   out.set(bom, 0);
   out.set(body, bom.length);
@@ -197,24 +202,29 @@ export function ensureBook(partial: Partial<Book> & { title: string; chapters: C
   };
 }
 
-/** 生成 EPUB zip 字节（mimetype 第一项 store） */
+/** 生成 EPUB zip 字节（mimetype 第一项 store，全部条目固定 mtime 保证字节确定性） */
 export function buildEpub(bookIn: Partial<Book> & { title: string; chapters: Chapter[]; css: string }): Uint8Array {
   const book = ensureBook(bookIn);
 
-  // fflate zipSync: 用对象时顺序不保证；用 Zippable 时 mimetype 需 level 0
-  // 为确保 mimetype 第一，用 zipSync 的 files 对象并依赖 fflate 对 level:0 的 store
-  const files: Record<string, Uint8Array | [Uint8Array, { level: 0 }]> = {};
+  // fflate zipSync 的 Zippable：每个条目 [bytes, ZipOptions]
+  // mtime 固定为 1980-01-01 UTC（ZIP DOS time 起始年），保证同输入产出字节级一致
+  // 对齐 Go fixedTime = time.Unix(0,0).UTC() 的"确定性"目标，但用 ZIP 合法最小时间
+  // mimetype 必须 level:0 (store) 且为第一项；其他条目走默认 level:6 (deflate)
+  const fixedTime: Date = new Date("1980-01-01T00:00:00Z");
+  const fixedOpts: ZipOptions = { mtime: fixedTime };
+  const mimetypeOpts: ZipOptions = { level: 0, mtime: fixedTime };
+  const files: Zippable = {};
 
-  files["mimetype"] = [u8("application/epub+zip"), { level: 0 }];
-  files["META-INF/container.xml"] = u8(toCrlf(CONTAINER_XML));
-  files["OEBPS/style.css"] = u8(toCrlf(book.css));
-  files["OEBPS/cover.html"] = withBom(coverHtml(book));
-  files["OEBPS/book-toc.html"] = withBom(bookTocHtml(book));
+  files["mimetype"] = [u8("application/epub+zip"), mimetypeOpts];
+  files["META-INF/container.xml"] = [u8(toCrlf(CONTAINER_XML)), fixedOpts];
+  files["OEBPS/style.css"] = [u8(toCrlf(book.css)), fixedOpts];
+  files["OEBPS/cover.html"] = [withBom(coverHtml(book)), fixedOpts];
+  files["OEBPS/book-toc.html"] = [withBom(bookTocHtml(book)), fixedOpts];
   for (let i = 0; i < book.chapters.length; i++) {
-    files[`OEBPS/chapter${i}.html`] = withBom(chapterHtml(book, i));
+    files[`OEBPS/chapter${i}.html`] = [withBom(chapterHtml(book, i)), fixedOpts];
   }
-  files["OEBPS/content.opf"] = withBom(opfXml(book));
-  files["OEBPS/toc.ncx"] = withBom(ncxXml(book));
+  files["OEBPS/content.opf"] = [withBom(opfXml(book)), fixedOpts];
+  files["OEBPS/toc.ncx"] = [withBom(ncxXml(book)), fixedOpts];
 
   // fflate zipSync 对对象键顺序：现代 JS 字符串键按插入序
   return zipSync(files, { level: 6 });
@@ -231,10 +241,11 @@ export function inferTitle(text: string, fileName: string): string {
     if (prefix) {
       const v = prefix[1].trim();
       if (v) return v;
-      // 前缀后无内容，原行整体兜底
+      // 前缀后无内容，原行整体作为书名兜底（与 Go 行为对齐）
+      return t;
     }
   }
-  const base = fileName.replace(/\\/g, "/").split("/").pop() || "book";
+  const base = (fileName || "book").replace(/\\/g, "/").split("/").pop() || "book";
   const dot = base.lastIndexOf(".");
   return (dot > 0 ? base.slice(0, dot) : dot === -1 ? base : "book") || "untitled";
 }

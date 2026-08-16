@@ -139,7 +139,7 @@ describe("buildEpub: 内容", () => {
     expect(ch).toContain('<h2 id="title" class="titlel2std">第1章 开端</h2>');
     expect(ch).toContain("&lt;标签&gt;");
     expect(ch).not.toContain("<标签>");
-    expect(ch).toContain("&amp; 引号 &quot; 测试。");
+    expect(ch).toContain("&amp; 引号 &#34; 测试。");
     // chapter2 空正文但有标题
     const ch2 = text(files["OEBPS/chapter2.html"]);
     expect(ch2).toContain('<h2 id="title" class="titlel2std">第2章 发展</h2>');

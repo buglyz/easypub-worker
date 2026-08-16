@@ -89,8 +89,11 @@ describe("contentDispositionAttachment（RFC 5987 filename*）", () => {
 });
 
 describe("jobId 白名单", () => {
-  it("YYYYMMDD-HHMMSS-8hex 通过", () => {
+  it("YYYYMMDD-HHMMSS-8hex 通过（向后兼容旧 ID）", () => {
     expect(isValidJobId("20250101-120000-abcdef12")).toBe(true);
+  });
+  it("YYYYMMDD-HHMMSS-32hex 通过（新格式，128 bit 熵）", () => {
+    expect(isValidJobId("20250101-120000-abcdef0123456789abcdef0123456789")).toBe(true);
   });
   it("32 位 hex 通过", () => {
     expect(isValidJobId("0123456789abcdef0123456789abcdef")).toBe(true);
@@ -102,11 +105,13 @@ describe("jobId 白名单", () => {
     expect(isValidJobId("")).toBe(false);
     expect(isValidJobId("a/b")).toBe(false);
   });
-  it("newJobId 生成符合白名单且唯一", () => {
+  it("newJobId 生成符合白名单且唯一，使用 128 bit 熵", () => {
     const a = newJobId();
     const b = newJobId();
     expect(isValidJobId(a)).toBe(true);
     expect(isValidJobId(b)).toBe(true);
     expect(a).not.toBe(b);
+    // 新 ID 格式：8 位日期-6 位时间-32 位 hex
+    expect(a).toMatch(/^[0-9]{8}-[0-9]{6}-[0-9a-f]{32}$/);
   });
 });

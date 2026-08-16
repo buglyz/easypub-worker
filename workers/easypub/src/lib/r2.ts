@@ -10,6 +10,8 @@ export interface JobMeta {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  /** 异步任务进入 running 的时间，用于 stale 检测 */
+  startedAt?: string;
   async?: boolean;
 }
 
@@ -23,6 +25,11 @@ export function outputKey(jobId: string): string {
 
 export function jobKey(jobId: string): string {
   return `jobs/${jobId}.json`;
+}
+
+/** 异步任务的转换参数 key（与 job meta 分开存以减少 job 体积） */
+export function optsKey(jobId: string): string {
+  return `jobs/${jobId}.opts.json`;
 }
 
 export async function putJob(env: Env, meta: JobMeta): Promise<void> {
@@ -71,7 +78,8 @@ export async function putEpub(
   await env.BUCKET.put(outputKey(jobId), bytes, {
     httpMetadata: {
       contentType: "application/epub+zip",
-      contentDisposition: `attachment; filename="${epubName.replace(/[^\x20-\x7E]/g, "_")}"`,
+      // 不再在这里写 Content-Disposition：下载路径由 ?name= 显式覆盖，
+      // 写在 metadata 里实际不参与响应头，纯冗余。
     },
     customMetadata: {
       epubName: epubName.slice(0, 200),
@@ -80,6 +88,19 @@ export async function putEpub(
   });
 }
 
-export async function getEpub(env: Env, jobId: string): Promise<R2ObjectBody | null> {
-  return env.BUCKET.get(outputKey(jobId));
+export async function getEpub(
+  env: Env,
+  jobId: string,
+  range?: { offset: number; length?: number } | { suffix: number }
+): Promise<R2ObjectBody | null> {
+  // R2 GET 支持 range 参数，类型由 @cloudflare/workers-types 提供
+  return range ? env.BUCKET.get(outputKey(jobId), { range }) : env.BUCKET.get(outputKey(jobId));
+}
+
+/** 删除临时 upload 与 opts 对象（异步任务结束后的清理）。失败忽略。 */
+export async function cleanupTempObjects(env: Env, jobId: string): Promise<void> {
+  await Promise.allSettled([
+    env.BUCKET.delete(uploadKey(jobId)),
+    env.BUCKET.delete(optsKey(jobId)),
+  ]);
 }

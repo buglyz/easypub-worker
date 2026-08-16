@@ -2,6 +2,29 @@
 (function () {
   "use strict";
 
+  var MAX_UPLOAD_BYTES = 32 << 20; // 与后端 MAX_UPLOAD_BYTES 保持一致
+  var POLL_MAX_TICKS = 150; // 5 分钟 / 2s 间隔，封堵 waitUntil 失控后的死循环
+  var FILE_EXT_RE = /\.(txt|utf8|gbk|utf-8)$/i;
+  var TOKEN = (function () {
+    // ACCESS_TOKEN 通过 URL 参数 ?token=... 注入，取完立刻从地址栏抹掉
+    // 避免泄漏到 Referer / 浏览历史
+    try {
+      var u = new URL(location.href);
+      var t = u.searchParams.get("token");
+      if (t) {
+        history.replaceState(null, "", u.pathname + u.hash);
+        return t;
+      }
+    } catch (e) {}
+    return "";
+  })();
+
+  function apiHeaders(extra) {
+    var h = extra || {};
+    if (TOKEN) h["X-EasyPub-Token"] = TOKEN;
+    return h;
+  }
+
   var $ = function (id) {
     return document.getElementById(id);
   };
@@ -159,12 +182,22 @@
 
   function setFile(file) {
     if (!file) return;
+    // 入口校验：大小 + 扩展名（拖拽不被 <input accept> 约束）
+    if (file.size > MAX_UPLOAD_BYTES) {
+      showError("文件不能超过 " + fmtBytes(MAX_UPLOAD_BYTES) + "（当前 " + fmtBytes(file.size) + "）");
+      return;
+    }
+    if (!FILE_EXT_RE.test(file.name)) {
+      showError("仅支持 .txt / .utf8 / .gbk 等文本文件");
+      return;
+    }
     state.file = file;
     state.fileName = file.name;
     state.fileSize = file.size;
 
     els.dropzoneBody.hidden = true;
     els.fileCard.hidden = false;
+    els.dropzone.classList.add("has-file");
     els.fileName.textContent = file.name;
     els.fileMeta.textContent = formatSize(file.size);
 
@@ -196,6 +229,7 @@
     els.fileInput.value = "";
     els.dropzoneBody.hidden = false;
     els.fileCard.hidden = true;
+    els.dropzone.classList.remove("has-file");
     els.detectBtn.disabled = true;
     els.convertBtn.disabled = true;
     els.summaryPlaceholder.hidden = false;
@@ -258,7 +292,11 @@
     els.preview.innerHTML = '<div class="preview-message">正在识别章节…</div>';
     setService("ready", "识别中");
 
-    fetch("/api/detect", { method: "POST", body: buildFormData() })
+    fetch("/api/detect", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: buildFormData(),
+    })
       .then(function (res) {
         return res.json().then(function (data) {
           return { ok: res.ok, data: data };
@@ -284,6 +322,13 @@
   /* ---------- 转换（同步 + 异步轮询） ---------- */
 
   function showResult(data) {
+    // 同源校验：防止后端异常返回外部 URL 被用作开放重定向/钓鱼
+    // 先校验再渲染，避免先显示成功再报错
+    var dl = data.download || "";
+    if (dl && dl.indexOf("/api/download/") !== 0) {
+      throw new Error("下载链接非法");
+    }
+
     els.result.hidden = false;
     els.result.classList.remove("is-error");
     els.resultKicker.textContent = "转换完成";
@@ -295,7 +340,7 @@
 
     var a = document.createElement("a");
     a.className = "download-link";
-    a.href = data.download || "";
+    a.href = dl;
     if (data.epubName) a.setAttribute("download", data.epubName);
     var span = document.createElement("span");
     span.textContent = "下载 " + (data.epubName || "EPUB");
@@ -312,8 +357,16 @@
   }
 
   function pollJob(jobId) {
+    var ticks = 0;
     var tick = function () {
-      fetch("/api/jobs/" + encodeURIComponent(jobId))
+      if (ticks++ >= POLL_MAX_TICKS) {
+        state.pollTimer = null;
+        els.flowConvert.textContent = "转换超时";
+        showError("转换超时，请重试或拆分大文件（约定 " + (POLL_MAX_TICKS * 2) + " 秒上限）");
+        updateAction("超时", "请重试或拆分大文件。", false);
+        return;
+      }
+      fetch("/api/jobs/" + encodeURIComponent(jobId), { headers: apiHeaders() })
         .then(function (res) {
           return res.json().then(function (data) {
             return { ok: res.ok, data: data };
@@ -324,11 +377,13 @@
           var data = r.data;
           if (data.status === "done") {
             state.pollTimer = null;
+            state.converting = false;
             showResult(data);
             return;
           }
           if (data.status === "error") {
             state.pollTimer = null;
+            state.converting = false;
             throw new Error(data.error || "转换失败");
           }
           els.flowConvert.textContent =
@@ -338,6 +393,7 @@
         })
         .catch(function (err) {
           state.pollTimer = null;
+          state.converting = false;
           els.flowConvert.textContent = "转换失败";
           showError(err.message);
           updateAction("出错了", "请重试或更换文件。", false);
@@ -358,7 +414,11 @@
     updateAction("转换中", "正在生成 EPUB…", true);
     setService("ready", "转换中");
 
-    fetch("/api/convert", { method: "POST", body: buildFormData() })
+    fetch("/api/convert", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: buildFormData(),
+    })
       .then(function (res) {
         return res.json().then(function (data) {
           return { ok: res.ok, data: data };
@@ -369,20 +429,20 @@
         var data = r.data;
         if (data.async) {
           // 大文件：异步任务，轮询 /api/jobs/:id
+          // 保持 state.converting=true，直到 pollJob done/error 才置 false
           els.progress.textContent = "文件较大，已创建异步任务（" + data.jobId + "）…";
           pollJob(data.jobId);
         } else {
+          state.converting = false;
           showResult(data);
         }
       })
       .catch(function (err) {
+        state.converting = false;
         els.flowConvert.textContent = "转换失败";
         showError(err.message);
         updateAction("出错了", "请重试或更换文件。", false);
         setService("error", "转换失败");
-      })
-      .finally(function () {
-        state.converting = false;
       });
   }
 
@@ -403,11 +463,13 @@
   ["dragenter", "dragover"].forEach(function (ev) {
     els.dropzone.addEventListener(ev, function (e) {
       e.preventDefault();
+      els.dropzone.classList.add("dragover");
     });
   });
   ["dragleave", "drop"].forEach(function (ev) {
     els.dropzone.addEventListener(ev, function (e) {
       e.preventDefault();
+      els.dropzone.classList.remove("dragover");
     });
   });
   els.dropzone.addEventListener("drop", function (e) {
@@ -417,6 +479,13 @@
   els.dropzone.addEventListener("click", function (e) {
     if (e.target === els.chooseBtn || e.target === els.changeFileBtn) return;
     els.fileInput.click();
+  });
+  // 键盘可达性：dropzone 是 role=button，需响应 Enter/Space
+  els.dropzone.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      els.fileInput.click();
+    }
   });
 
   els.detectBtn.addEventListener("click", detectChapters);

@@ -31,7 +31,10 @@ SYNC_MAX_BYTES = "20971520"
 MAX_UPLOAD_BYTES = "33554432"
 # 产物保留提示（秒），实际过期请在 R2 配置 lifecycle 规则
 OUTPUT_TTL_SECONDS = "86400"
-# 可选：设置后要求请求头 X-EasyPub-Token 匹配
+# 可选：设置后要求请求头 X-EasyPub-Token 匹配。
+# 强烈建议公网部署启用；推荐用 secret（不进仓库），不要明文写在 [vars]：
+#   npx wrangler secret put ACCESS_TOKEN
+# 然后 [vars] 这行可以删掉。
 # ACCESS_TOKEN = ""
 
 # 生产可取消注释并绑定自定义域

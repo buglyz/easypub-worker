@@ -23,6 +23,16 @@ export async function parseMultipart(
     throw new Error("需要 multipart/form-data 上传");
   }
 
+  // 入口预校验：声称的 Content-Length 直接超限就 413，避免被巨大 chunked / 虚标
+  // 小 CL 但实流式大 body 把 Workers 内存吃满
+  const clHeader = request.headers.get("content-length");
+  if (clHeader) {
+    const cl = parseInt(clHeader, 10);
+    if (Number.isFinite(cl) && cl > maxUploadBytes) {
+      throw new Error(`文件超过 ${maxUploadBytes >> 20} MB 限制`);
+    }
+  }
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -112,8 +122,13 @@ export function securityHeaders(h: Headers): void {
   h.set("X-Frame-Options", "DENY");
   h.set("Referrer-Policy", "no-referrer");
   h.set(
+    "Strict-Transport-Security",
+    "max-age=63072000; includeSubDomains; preload"
+  );
+  h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  h.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
   );
 }
 

@@ -74,6 +74,15 @@ function compileSafe(src: string, flags = ""): RegExp | null {
   }
 }
 
+/** 编译用户提供的正则；失败时抛错以对齐 Go buildPatterns 的显式报错 */
+function compileStrict(src: string, label: string, flags = ""): RegExp {
+  try {
+    return new RegExp(src, flags);
+  } catch (e) {
+    throw new Error(`${label}正则编译失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 function stripClass(s: string): string {
   if (s.startsWith("[")) s = s.slice(1);
   if (s.endsWith("]")) s = s.slice(0, -1);
@@ -97,17 +106,20 @@ function buildSimplePattern(opt: TxtOptions): RegExp | null {
 function buildPatterns(opt: TxtOptions): RegExp[] {
   const pats: RegExp[] = [];
   if (opt.fullReg) {
-    const p = compileSafe(opt.fullReg);
-    if (p) pats.push(p);
+    // 用户提供 custom 正则必须能编译，否则对齐 Go 显式报错
+    pats.push(compileStrict(opt.fullReg, "完整正则"));
   }
   if (opt.simpleRegP1 || opt.simpleRegP3) {
     const p = buildSimplePattern(opt);
     if (p) pats.push(p);
+    else if (opt.simpleRegP1) {
+      throw new Error("附加正则 P3 编译失败");
+    }
   }
   for (const s of opt.additionalReg) {
     if (!s) continue;
-    const p = compileSafe(s);
-    if (p) pats.push(p);
+    // additionalReg 由前端逐行提供，非法行严格报错
+    pats.push(compileStrict(s, "附加正则"));
   }
   if (opt.autoMark || pats.length === 0) {
     for (const s of DEFAULT_REGEXPS) {
@@ -281,13 +293,19 @@ export function optionsFromForm(fields: Record<string, string>): TxtOptions {
   if (fullReg.length > 200) fullReg = fullReg.slice(0, 200);
   const autoMarkRaw = fields.autoMark;
   let autoMark = autoMarkRaw === "true" || autoMarkRaw === "1";
+  // 注意：Go 端 r.FormValue("removeBlank") 缺省 "" → false，Workers 版缺省 true
+  // 与前端 checkbox 默认勾选保持一致；差异仅在"未发字段"的边缘场景，对齐测试断言
   const opt = defaultTxtOptions({
     autoMark,
-    removeBlankLine: fields.removeBlank === undefined ? true : fields.removeBlank === "true" || fields.removeBlank === "1",
+    removeBlankLine:
+      fields.removeBlank === undefined
+        ? true
+        : fields.removeBlank === "true" || fields.removeBlank === "1",
     splitMode,
     splitCount: parseInt(fields.splitCount || "0", 10) || 0,
     fullReg,
-    addSpace: fields.addSpace === undefined ? false : fields.addSpace === "true" || fields.addSpace === "1",
+    addSpace:
+      fields.addSpace === "true" || fields.addSpace === "1",
     addSpaceCount:
       fields.addSpaceCount === undefined
         ? 1

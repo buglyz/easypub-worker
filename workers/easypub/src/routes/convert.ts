@@ -3,9 +3,20 @@ import { numEnv } from "../env";
 import { parseMultipart, jsonResponse, safeErr } from "../lib/form";
 import { runConvert } from "../lib/convert-core";
 import { displayNameFromUpload, newJobId } from "../lib/names";
-import { getJob, putEpub, putJob, putTextUpload, type JobMeta } from "../lib/r2";
+import {
+  cleanupTempObjects,
+  getJob,
+  optsKey,
+  putEpub,
+  putJob,
+  putTextUpload,
+  type JobMeta,
+} from "../lib/r2";
 import { defaultCss } from "../lib/css";
 import { optionsFromForm } from "../lib/txt-parse";
+
+/** 异步任务 stale 检测：running 超过该秒数视为崩溃（Workers waitUntil 上限 ~30s，留容错） */
+const ASYNC_TIMEOUT_SECONDS = 90;
 
 export async function handleConvert(
   request: Request,
@@ -16,8 +27,10 @@ export async function handleConvert(
     return jsonResponse({ error: "method not allowed" }, 405);
   }
 
+  // 入口预校验已在 parseMultipart 中完成（Content-Length + file.size）
   const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 32 << 20);
-  const syncMax = numEnv(env.SYNC_MAX_BYTES, 3 << 20);
+  // dev/prod 默认值对齐 wrangler.toml 的 SYNC_MAX_BYTES=20MB，避免 dev 行为漂移
+  const syncMax = numEnv(env.SYNC_MAX_BYTES, 20 << 20);
 
   let up;
   try {
@@ -43,9 +56,9 @@ export async function handleConvert(
       async: true,
     };
     await putTextUpload(env, jobId, up.text, up.fileName);
-    // 把转换参数也存 job meta 扩展字段（序列化 options）
+    // 把转换参数也存 job opts 扩展对象（与 job meta 分开存）
     await env.BUCKET.put(
-      `jobs/${jobId}.opts.json`,
+      optsKey(jobId),
       JSON.stringify({
         title: up.title,
         author: up.author,
@@ -58,7 +71,8 @@ export async function handleConvert(
     );
     await putJob(env, meta);
 
-    ctx.waitUntil(runAsyncJob(env, jobId));
+    // 把已解码 text 透传进 waitUntil 闭包，避免异步路径再读一次 upload 对象
+    ctx.waitUntil(runAsyncJob(env, jobId, up.text));
 
     return jsonResponse({
       async: true,
@@ -113,19 +127,22 @@ export async function handleConvert(
   }
 }
 
-async function runAsyncJob(env: Env, jobId: string): Promise<void> {
-  const meta = await getJob(env, jobId);
+/**
+ * 异步任务执行。text 已从 convert handler 透传过来，避免再读一次 R2 upload 对象。
+ * 失败/成功统一清理 uploads 与 opts.json（产物 outputs/ 保留 24h 由 lifecycle 清）。
+ */
+async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void> {
+  let meta = await getJob(env, jobId);
   if (!meta) return;
   meta.status = "running";
-  meta.updatedAt = new Date().toISOString();
+  meta.startedAt = new Date().toISOString();
+  meta.updatedAt = meta.startedAt;
   await putJob(env, meta);
 
   try {
-    const upload = await env.BUCKET.get(`uploads/${jobId}.txt`);
-    const optsObj = await env.BUCKET.get(`jobs/${jobId}.opts.json`);
-    if (!upload || !optsObj) throw new Error("missing upload");
+    const optsObj = await env.BUCKET.get(optsKey(jobId));
+    if (!optsObj) throw new Error("missing job opts");
 
-    const text = await upload.text();
     const opts = (await optsObj.json()) as {
       title: string;
       author: string;
@@ -146,6 +163,8 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
     });
 
     await putEpub(env, jobId, result.epub, meta.epubName);
+    meta = await getJob(env, jobId);
+    if (!meta) return;
     meta.status = "done";
     meta.chapters = result.chapters;
     meta.encoding = result.encoding;
@@ -153,10 +172,17 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
     await putJob(env, meta);
   } catch (err) {
     console.error("async convert error", err);
+    meta = await getJob(env, jobId);
+    if (!meta) return;
     meta.status = "error";
     meta.error = "转换失败";
     meta.updatedAt = new Date().toISOString();
     await putJob(env, meta);
+    // 抛出以便触发 ctx.waitUntil 失败日志（Workers 会记为 unhandled rejection）
+    throw err;
+  } finally {
+    // 无论成功/失败都清掉临时上传与 opts，减小 R2 占用
+    await cleanupTempObjects(env, jobId);
   }
 }
 
@@ -168,6 +194,19 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
   if (!meta) {
     return jsonResponse({ error: "job not found" }, 404);
   }
+
+  // stale 检测：如果处于 running 状态但 startedAt 距今已超过 ASYNC_TIMEOUT_SECONDS，
+  // 视为 waitUntil 崩溃/超时，自动标记为 error，防止前端轮询永不收敛
+  if (meta.status === "running" && meta.startedAt) {
+    const ageSeconds = (Date.now() - new Date(meta.startedAt).getTime()) / 1000;
+    if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
+      meta.status = "error";
+      meta.error = "后台任务超时或异常退出";
+      meta.updatedAt = new Date().toISOString();
+      await putJob(env, meta);
+    }
+  }
+
   const body: Record<string, unknown> = {
     jobId: meta.jobId,
     status: meta.status,
