@@ -227,10 +227,13 @@
 
     hideResult();
     els.preview.innerHTML =
-      '<div class="empty-state">文件已就绪，点击「识别章节」查看目录预览。</div>';
+      '<div class="preview-message">正在识别章节…</div>';
     els.chapterCount.textContent = "0 章";
     updateAction("准备开始", "已选择 " + file.name + "，可识别章节或直接转换。", false);
     setService("ready", "服务就绪");
+
+    // 选完文件后自动触发章节识别，免去手动点击
+    detectChapters();
   }
 
   function clearFile() {
@@ -246,7 +249,7 @@
     els.summaryPlaceholder.hidden = false;
     els.fileSummary.hidden = true;
     els.preview.innerHTML =
-      '<div class="empty-state">选择文件后点击「识别章节」，这里会显示目录预览。</div>';
+      '<div class="empty-state">选择 TXT 文件后将自动识别章节，这里会显示目录预览。</div>';
     els.chapterCount.textContent = "0 章";
     els.flowSource.textContent = "等待文件";
     els.flowChapter.textContent = "尚未识别";
