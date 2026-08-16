@@ -83,6 +83,7 @@ export async function parseMultipart(
     marginTop: clampInt(parseInt(fields.marginTop || "0", 10) || 0, 0, 50, 5),
     textAlign: clampInt(parseInt(fields.textAlign || "0", 10) || 0, 0, 3, 0),
     indent: clampFloat(parseFloat(fields.indent || "0") || 0, 0, 4, 0),
+    customCss: (fields.customCss || "").slice(0, 10000),
   });
 
   return {

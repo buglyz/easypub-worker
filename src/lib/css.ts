@@ -8,6 +8,8 @@ export interface CssOptions {
   marginTop: number;
   textAlign: number;
   indent: number;
+  /** 用户自定义 CSS 片段，追加在生成 CSS 末尾（优先级最高，可覆盖自动生成的规则） */
+  customCss: string;
 }
 
 export function defaultCss(partial?: Partial<CssOptions>): CssOptions {
@@ -19,6 +21,7 @@ export function defaultCss(partial?: Partial<CssOptions>): CssOptions {
     marginTop: 5,
     textAlign: 0,
     indent: 0,
+    customCss: "",
     ...partial,
   };
 }
@@ -207,6 +210,12 @@ export function generateCss(o: CssOptions): string {
   if (o.textAlign !== 0) {
     const align = ["justify", "left", "center", "right"][o.textAlign];
     b += `p, .a { text-align: ${align}; }\n`;
+  }
+
+  // 用户自定义 CSS 追加在末尾，优先级最高，可覆盖以上自动生成的规则
+  if (o.customCss && o.customCss.trim()) {
+    b += "\n/* ===== 用户自定义 CSS ===== */\n";
+    b += o.customCss.trim() + "\n";
   }
 
   return b;

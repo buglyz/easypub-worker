@@ -77,11 +77,13 @@
     marginTop: $("marginTop"),
     indent: $("indent"),
     textAlign: $("textAlign"),
-    
+
     valLineHeight: $("valLineHeight"),
     valFontSize: $("valFontSize"),
     valMarginTop: $("valMarginTop"),
     valIndent: $("valIndent"),
+
+    customCss: $("customCss"),
     
     chapterCount: $("chapterCount"),
     convertBtn: $("convertBtn"),
@@ -185,6 +187,38 @@
       p.style.textIndent = ind > 0 ? ind + "rem" : "0em";
       p.style.textAlign = alignVal;
     });
+
+    // 注入用户自定义 CSS 到模拟器预览（作用域限定在 .reader-device 内）
+    var styleTag = document.getElementById("sim-custom-css");
+    if (!styleTag) {
+      styleTag = document.createElement("style");
+      styleTag.id = "sim-custom-css";
+      document.head.appendChild(styleTag);
+    }
+    var rawCss = els.customCss ? els.customCss.value : "";
+    // 简单作用域隔离：每条规则前加 .reader-device 前缀
+    // 只处理基本选择器，复杂 CSS 可能不完全准确，但足够预览
+    var scopedCss = "";
+    if (rawCss && rawCss.trim()) {
+      scopedCss = rawCss
+        .replace(/\/\*[\s\S]*?\*\//g, "") // 去注释
+        .replace(/\s+/g, " ")
+        .split("}")
+        .map(function (rule) {
+          var parts = rule.split("{");
+          if (parts.length < 2) return "";
+          var selectors = parts[0].trim();
+          var body = parts.slice(1).join("{").trim();
+          if (!selectors || !body) return "";
+          var scoped = selectors
+            .split(",")
+            .map(function (s) { return ".reader-device " + s.trim(); })
+            .join(", ");
+          return scoped + " { " + body + " }";
+        })
+        .join("\n");
+    }
+    styleTag.textContent = scopedCss;
   }
 
   /* ---------- Form Data Assembler ---------- */
@@ -227,6 +261,7 @@
     form.append("marginTop", els.marginTop.value);
     form.append("indent", els.indent.value);
     form.append("textAlign", els.textAlign.value);
+    form.append("customCss", els.customCss ? els.customCss.value : "");
 
     return form;
   }
@@ -575,7 +610,7 @@
   // Real-time Inputs Sync for Reader Simulator
   [
     els.title, els.author, els.lineHeight, els.fontSize,
-    els.marginTop, els.indent, els.textAlign
+    els.marginTop, els.indent, els.textAlign, els.customCss
   ].forEach(function (input) {
     if (!input) return;
     input.addEventListener("input", syncLiveReaderPreview);
