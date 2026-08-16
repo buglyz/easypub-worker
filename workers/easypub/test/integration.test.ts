@@ -350,4 +350,61 @@ describe("Worker 集成（本地 R2 桩点）", () => {
     const r3 = await worker.fetch(okReq, env, {} as ExecutionContext);
     expect(r3.status).toBe(200);
   });
+
+  it("/api/auth/verify：未配置 ACCESS_TOKEN 返回 200 enabled:false", async () => {
+    const env = makeEnv(new Map(), { ACCESS_TOKEN: "" });
+    const res = await worker.fetch(
+      new Request("https://easypub.test/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { ok: boolean; enabled: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.enabled).toBe(false);
+  });
+
+  it("/api/auth/verify：配置 ACCESS_TOKEN 后无 token 401、错 token 401、正确 token 200", async () => {
+    const token = "verify-test-token-abc";
+    const env = makeEnv(new Map(), { ACCESS_TOKEN: token });
+
+    // 1. 无 token
+    const r1 = await worker.fetch(
+      new Request("https://easypub.test/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(r1.status).toBe(401);
+
+    // 2. 错 token
+    const r2 = await worker.fetch(
+      new Request("https://easypub.test/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-EasyPub-Token": "wrong" },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(r2.status).toBe(401);
+
+    // 3. 正确 token
+    const r3 = await worker.fetch(
+      new Request("https://easypub.test/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-EasyPub-Token": token },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(r3.status).toBe(200);
+    const data = (await r3.json()) as { ok: boolean; enabled: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.enabled).toBe(true);
+  });
 });

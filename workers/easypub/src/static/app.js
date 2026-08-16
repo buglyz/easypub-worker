@@ -6,18 +6,29 @@
   var POLL_MAX_TICKS = 150; // 5 分钟 / 2s 间隔，封堵 waitUntil 失控后的死循环
   var FILE_EXT_RE = /\.(txt|utf8|gbk|utf-8)$/i;
   var TOKEN = (function () {
-    // ACCESS_TOKEN 通过 URL 参数 ?token=... 注入，取完立刻从地址栏抹掉
-    // 避免泄漏到 Referer / 浏览历史
+    // Token 来源优先级：
+    // 1. URL 参数 ?token=... （从地址栏抹掉避免 Referer/历史泄漏）
+    // 2. sessionStorage（登录页验证后存入，关闭标签页失效）
     try {
       var u = new URL(location.href);
       var t = u.searchParams.get("token");
       if (t) {
         history.replaceState(null, "", u.pathname + u.hash);
+        try { sessionStorage.setItem("easypub_token", t); } catch (e) {}
         return t;
       }
+      var st = sessionStorage.getItem("easypub_token");
+      if (st) return st;
     } catch (e) {}
     return "";
   })();
+
+  function redirectToAuth() {
+    // 401 时跳登录页，带 next 参数方便登录后跳回
+    var next = location.pathname + location.search + location.hash;
+    var authUrl = "/auth.html?next=" + encodeURIComponent(next);
+    location.replace(authUrl);
+  }
 
   function apiHeaders(extra) {
     var h = extra || {};
@@ -299,10 +310,11 @@
     })
       .then(function (res) {
         return res.json().then(function (data) {
-          return { ok: res.ok, data: data };
+          return { ok: res.ok, status: res.status, data: data };
         });
       })
       .then(function (r) {
+        if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "识别失败");
         renderPreview(r.data);
         els.flowChapter.textContent = "已识别 " + (r.data.titles || []).length + " 章";
@@ -369,10 +381,11 @@
       fetch("/api/jobs/" + encodeURIComponent(jobId), { headers: apiHeaders() })
         .then(function (res) {
           return res.json().then(function (data) {
-            return { ok: res.ok, data: data };
+            return { ok: res.ok, status: res.status, data: data };
           });
         })
         .then(function (r) {
+          if (r.status === 401) { redirectToAuth(); return; }
           if (!r.ok) throw new Error(r.data.error || "任务查询失败");
           var data = r.data;
           if (data.status === "done") {
@@ -421,10 +434,11 @@
     })
       .then(function (res) {
         return res.json().then(function (data) {
-          return { ok: res.ok, data: data };
+          return { ok: res.ok, status: res.status, data: data };
         });
       })
       .then(function (r) {
+        if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "转换失败");
         var data = r.data;
         if (data.async) {
@@ -538,6 +552,15 @@
       e.preventDefault();
     }
   });
+
+  // 启动时验证 token：若启用了 ACCESS_TOKEN 但当前无 token 或 token 无效 → 跳登录
+  (function checkAuthOnBoot() {
+    fetch("/api/auth/verify", { headers: apiHeaders() })
+      .then(function (res) {
+        if (res.status === 401) redirectToAuth();
+      })
+      .catch(function () { /* 网络错误不强制跳转，避免离线场景无法使用 */ });
+  })();
 
   updateAction("准备开始", "请选择一个 TXT 文件。", false);
 })();

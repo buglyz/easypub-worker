@@ -61,6 +61,16 @@ export default {
       if (denied) return withSecurity(denied);
 
       try {
+        if (path === "/api/auth/verify") {
+          // 登录页验证 Token：已配置 ACCESS_TOKEN 时校验头；未配置直接返回 200
+          // （登录页据此区分"未启用鉴权"与"token 错"两种场景）
+          if (!env.ACCESS_TOKEN) {
+            return withSecurity(jsonResponse({ ok: true, enabled: false }, 200));
+          }
+          const denied = checkAccess(request, env);
+          if (denied) return withSecurity(denied);
+          return withSecurity(jsonResponse({ ok: true, enabled: true }, 200));
+        }
         if (path === "/api/detect") {
           return withSecurity(await handleDetect(request, env));
         }

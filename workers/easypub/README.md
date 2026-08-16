@@ -88,7 +88,12 @@ npx wrangler secret put ACCESS_TOKEN
 # 提示输入时粘贴一个随机长字符串，例如 openssl rand -hex 32
 ```
 
-启用后所有 `/api/*` 请求都要求请求头 `X-EasyPub-Token` 匹配，前端通过 URL 参数 `?token=<值>` 注入后自动从地址栏抹掉。
+启用后所有 `/api/*` 请求都要求请求头 `X-EasyPub-Token` 匹配。前端集成登录页：
+
+- 访问首页时若 API 返回 401，自动跳转 `/auth.html`
+- 登录页输入 token → 调 `/api/auth/verify` 验证 → 成功后存 `sessionStorage` → 跳回主页
+- 关闭标签页后 token 失效，需重新登录
+- 也支持 URL 参数 `?token=xxx` 直接进入（加载后自动抹掉，避免 Referer/历史泄漏）
 
 更彻底的方案：把 Worker 放在 Cloudflare Access 后面，零信任登录后再访问。Token + Access 双重保护是公网部署的最佳实践。
 

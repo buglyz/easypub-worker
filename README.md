@@ -65,8 +65,11 @@ npx wrangler secret put ACCESS_TOKEN
 启用后：
 
 - 所有 `/api/*` 请求要求 `X-EasyPub-Token` 请求头匹配
-- 前端通过 URL 参数 `?token=<你的 token>` 注入，加载后自动从地址栏抹掉（不留 Referer / 浏览历史）
-- 静态资源（首页）无需 token，可正常访问
+- 访问 `https://easypub.xxx.workers.dev/` 会自动跳转到 `/auth.html` 登录页
+- 在登录页输入 token，前端调 `/api/auth/verify` 验证，成功后存入 `sessionStorage` 并跳回主页
+- 关闭浏览器标签页后 token 失效，下次访问需重新登录
+- 也支持通过 URL 参数 `?token=xxx` 直接进入（加载后自动从地址栏抹掉）
+- 静态资源（HTML/CSS/JS）本身无需 token，但 API 调用必带
 
 > **更彻底的方案**：把 Worker 放在 Cloudflare Access 后面，零信任登录后再访问。Token + Access 双重保护是公网部署的最佳实践。
 
