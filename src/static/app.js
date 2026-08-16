@@ -420,14 +420,46 @@
     els.resultMeta.textContent =
       (data.epubName || "book.epub") +
       " · " + (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "utf-8").toUpperCase();
-    
+
     els.resultActions.innerHTML = "";
-    var a = document.createElement("a");
-    a.className = "download-btn-giant";
-    a.href = dl;
-    if (data.epubName) a.setAttribute("download", data.epubName);
-    a.innerHTML = '<span>下载 ' + escapeHtml(data.epubName || "EPUB") + '</span> <span>↓</span>';
-    els.resultActions.appendChild(a);
+    var btn = document.createElement("button");
+    btn.className = "download-btn-giant";
+    btn.type = "button";
+    btn.innerHTML = '<span>下载 ' + escapeHtml(data.epubName || "EPUB") + '</span> <span>↓</span>';
+
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      btn.innerHTML = '<span>正在获取文件…</span>';
+
+      fetch(dl, { headers: apiHeaders() })
+        .then(function (res) {
+          if (res.status === 401) { redirectToAuth(); return null; }
+          if (!res.ok) throw new Error("下载失败 (HTTP " + res.status + ")");
+          return res.blob();
+        })
+        .then(function (blob) {
+          if (!blob) return;
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = data.epubName || "book.epub";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          btn.disabled = false;
+          btn.innerHTML = '<span>下载 ' + escapeHtml(data.epubName || "EPUB") + '</span> <span>↓</span>';
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.innerHTML = '<span>下载失败，点击重试</span>';
+          setTimeout(function () {
+            btn.innerHTML = '<span>下载 ' + escapeHtml(data.epubName || "EPUB") + '</span> <span>↓</span>';
+          }, 3000);
+        });
+    });
+
+    els.resultActions.appendChild(btn);
 
     els.progressWrap.hidden = true;
     updateAction("生成完毕", "可点击按钮下载 EPUB 电子书。", false);

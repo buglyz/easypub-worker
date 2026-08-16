@@ -749,10 +749,12 @@ code, pre {
   padding: 12px 20px;
   background: var(--primary);
   color: #fff;
+  border: none;
   border-radius: var(--radius-sm);
   text-decoration: none;
   font-size: 14px;
   font-weight: 600;
+  cursor: pointer;
   transition: background var(--transition-fast);
 }
 
