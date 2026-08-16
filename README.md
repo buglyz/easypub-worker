@@ -123,6 +123,22 @@ npx wrangler deployments list          # 查看当前部署
 # 然后重新 npx wrangler deploy
 ```
 
+### 6. 通过 Cloudflare 控制台连接 GitHub 仓库自动部署（可选）
+
+如果不想本地 `wrangler deploy`，可以让 Cloudflare 在每次 push 到 `main` 时自动构建部署：
+
+1. 进入 Cloudflare Dashboard → Workers & Pages → **Create** → **Import a repository**
+2. 选择 GitHub 账号与 `buglyz/easypub-worker` 仓库
+3. **Production branch** 填 `main`
+4. 构建配置可留空（wrangler 会自动识别 `wrangler.toml`）
+5. 在 **Settings → Bindings** 里手动添加：
+   - **R2 bucket**：变量名 `BUCKET`，桶名 `easypub`（需先在 R2 创建）
+6. 在 **Settings → Variables and Secrets** 添加：
+   - `ACCESS_TOKEN`（类型选 Secret，粘贴你的 token）
+7. Save and Deploy
+
+> **注意**：`wrangler.toml` 中的 `[[r2_buckets]]` 与 `[vars]` 在 Git 集成自动部署时**不会自动应用**，R2 binding 和 Secret 必须在 Dashboard 手动配置。`wrangler.toml` 在 Git 集成下只用于 `main` 入口路径、`compatibility_flags`、`[assets]` 静态资源目录等不敏感配置。
+
 ## API
 
 - `POST /api/detect`：multipart 上传 `file` + 切分参数 → `{ count, titles[], encoding }`（空标题章不进 `titles`，`count` 只计有标题章）
