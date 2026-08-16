@@ -1,14 +1,17 @@
-/* EasyPub Workers 前端：上传 → 识别章节 → 转换(同步/异步) → 下载 */
+/* ==========================================================================
+   EasyPub Workers - Modern Frontend Application Engine
+   ========================================================================== */
+
 (function () {
   "use strict";
 
-  var MAX_UPLOAD_BYTES = 32 << 20; // 与后端 MAX_UPLOAD_BYTES 保持一致
-  var POLL_MAX_TICKS = 150; // 5 分钟 / 2s 间隔，封堵 waitUntil 失控后的死循环
+  // Constants
+  var MAX_UPLOAD_BYTES = 32 << 20; // 32 MB
+  var POLL_MAX_TICKS = 150; // 5 min timeout
   var FILE_EXT_RE = /\.(txt|utf8|gbk|utf-8)$/i;
+
+  // Token Management
   var TOKEN = (function () {
-    // Token 来源优先级：
-    // 1. URL 参数 ?token=... （从地址栏抹掉避免 Referer/历史泄漏）
-    // 2. sessionStorage（登录页验证后存入，关闭标签页失效）
     try {
       var u = new URL(location.href);
       var t = u.searchParams.get("token");
@@ -24,7 +27,6 @@
   })();
 
   function redirectToAuth() {
-    // 401 时跳登录页，带 next 参数方便登录后跳回
     var next = location.pathname + location.search + location.hash;
     var authUrl = "/auth.html?next=" + encodeURIComponent(next);
     location.replace(authUrl);
@@ -36,6 +38,7 @@
     return h;
   }
 
+  // DOM Helper
   var $ = function (id) {
     return document.getElementById(id);
   };
@@ -51,9 +54,12 @@
     fileName: $("fileName"),
     fileMeta: $("fileMeta"),
     changeFileBtn: $("changeFileBtn"),
+    
     title: $("title"),
     author: $("author"),
+    
     chapterMode: $("chapterMode"),
+    modeSegments: $("modeSegments"),
     fullRegField: $("fullRegField"),
     fullReg: $("fullReg"),
     splitCountField: $("splitCountField"),
@@ -62,63 +68,74 @@
     addSpace: $("addSpace"),
     addSpaceCountField: $("addSpaceCountField"),
     addSpaceCount: $("addSpaceCount"),
+    
     detectBtn: $("detectBtn"),
     preview: $("preview"),
+    
     lineHeight: $("lineHeight"),
     fontSize: $("fontSize"),
     marginTop: $("marginTop"),
     indent: $("indent"),
     textAlign: $("textAlign"),
+    
+    valLineHeight: $("valLineHeight"),
+    valFontSize: $("valFontSize"),
+    valMarginTop: $("valMarginTop"),
+    valIndent: $("valIndent"),
+    
     chapterCount: $("chapterCount"),
-    flowSource: $("flowSource"),
-    flowChapter: $("flowChapter"),
-    flowLayout: $("flowLayout"),
-    flowConvert: $("flowConvert"),
-    summaryPlaceholder: $("summaryPlaceholder"),
-    fileSummary: $("fileSummary"),
-    summaryName: $("summaryName"),
-    summarySize: $("summarySize"),
-    summaryEncoding: $("summaryEncoding"),
+    convertBtn: $("convertBtn"),
+    actionTitle: $("actionTitle"),
+    progress: $("progress"),
+    progressWrap: $("progressWrap"),
+    progressBarFill: $("progressBarFill"),
+    
     result: $("result"),
-    resultKicker: $("resultKicker"),
     resultTitle: $("resultTitle"),
     resultMeta: $("resultMeta"),
     resultActions: $("resultActions"),
-    actionTitle: $("actionTitle"),
-    progress: $("progress"),
-    convertBtn: $("convertBtn"),
+    summaryEncoding: $("summaryEncoding"),
+    
+    simTitle: $("simTitle"),
+    simAuthor: $("simAuthor"),
+    simChapterTitle: $("simChapterTitle"),
+    simParagraph1: $("simParagraph1"),
+    simParagraph2: $("simParagraph2"),
   };
 
+  // State Management
   var state = {
     file: null,
-    fileName: null,
+    fileName: "",
     fileSize: 0,
     detecting: false,
     converting: false,
     pollTimer: null,
   };
 
-  /* ---------- 工具 ---------- */
+  /* ---------- Utility Functions ---------- */
 
   function formatSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
     if (bytes >= 1 << 20) return (bytes / (1 << 20)).toFixed(1) + " MB";
     if (bytes >= 1 << 10) return (bytes / (1 << 10)).toFixed(1) + " KB";
     return bytes + " B";
   }
 
-  function setService(tone, text) {
-    els.serviceState.textContent = text || "服务就绪";
-    els.serviceState.dataset.tone = tone || "ready";
+  function escapeHtml(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  function setStep(flow, done) {
-    var items = document.querySelectorAll("#flowList .step-item");
-    var seen = false;
-    items.forEach(function (item) {
-      if (item.dataset.flow === flow) seen = true;
-      item.classList.toggle("done", done && seen);
-      item.classList.toggle("active", seen && !(done && seen));
-    });
+  function setServiceState(tone, text) {
+    if (!els.serviceState) return;
+    var statusText = els.serviceState.querySelector(".status-text");
+    if (statusText) statusText.textContent = text || "服务就绪";
+    els.serviceState.dataset.state = tone || "ready";
   }
 
   function updateAction(title, progress, busy) {
@@ -129,22 +146,48 @@
 
   function showError(message) {
     els.preview.innerHTML =
-      '<div class="error-message" role="alert">' +
+      '<div class="preview-empty-msg" style="color: var(--danger);" role="alert">' +
       escapeHtml(message || "操作失败，请重试") +
       "</div>";
-    setService("error", "出错了");
+    setServiceState("error", "出错了");
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  /* ---------- Live Reader Simulator Synchronizer ---------- */
+
+  function syncLiveReaderPreview() {
+    // Sync Metadata
+    var titleVal = els.title.value.trim() || state.fileName.replace(/\.[^/.]+$/, "") || "未命名图书";
+    var authorVal = els.author.value.trim() || "未知作者";
+    els.simTitle.textContent = titleVal;
+    els.simAuthor.textContent = authorVal;
+
+    // Apply Typography Styles to Simulated Paragraphs & Headings
+    var lh = (parseInt(els.lineHeight.value, 10) || 120);
+    var fs = (parseInt(els.fontSize.value, 10) || 100);
+    var mt = (parseInt(els.marginTop.value, 10) || 5);
+    var ind = (parseFloat(els.indent.value) || 0);
+    var alignCode = parseInt(els.textAlign.value, 10) || 0;
+    var alignMap = ["justify", "left", "center", "right"];
+    var alignVal = alignMap[alignCode] || "justify";
+
+    // Update Label Units
+    els.valLineHeight.textContent = lh + "%";
+    els.valFontSize.textContent = fs + "%";
+    els.valMarginTop.textContent = mt + "px";
+    els.valIndent.textContent = ind + "rem";
+
+    var pElements = [els.simParagraph1, els.simParagraph2];
+    pElements.forEach(function (p) {
+      if (!p) return;
+      p.style.lineHeight = (lh / 100);
+      p.style.fontSize = (fs / 100) + "rem";
+      p.style.marginTop = mt + "px";
+      p.style.textIndent = ind > 0 ? ind + "rem" : "0em";
+      p.style.textAlign = alignVal;
+    });
   }
 
-  /* ---------- 表单组装 ---------- */
+  /* ---------- Form Data Assembler ---------- */
 
   function buildFormData() {
     var form = new FormData();
@@ -157,6 +200,7 @@
     var autoMark = true;
     var fullReg = "";
     var splitCount = 0;
+
     if (mode === "custom") {
       autoMark = false;
       fullReg = els.fullReg.value.trim();
@@ -168,6 +212,7 @@
       splitMode = 2;
       autoMark = false;
     }
+
     form.append("splitMode", String(splitMode));
     form.append("autoMark", autoMark ? "true" : "false");
     form.append("fullReg", fullReg);
@@ -175,33 +220,31 @@
 
     form.append("removeBlank", els.removeBlank.checked ? "true" : "false");
     form.append("addSpace", els.addSpace.checked ? "true" : "false");
-    form.append(
-      "addSpaceCount",
-      String(parseInt(els.addSpaceCount.value, 10) || 1)
-    );
+    form.append("addSpaceCount", String(parseInt(els.addSpaceCount.value, 10) || 1));
 
     form.append("lineHeight", els.lineHeight.value);
     form.append("fontSize", els.fontSize.value);
     form.append("marginTop", els.marginTop.value);
     form.append("indent", els.indent.value);
     form.append("textAlign", els.textAlign.value);
-    // 仅 EPUB：无 enableMobi / configPath
+
     return form;
   }
 
-  /* ---------- 文件选择 ---------- */
+  /* ---------- File Selection & Handling ---------- */
 
   function setFile(file) {
     if (!file) return;
-    // 入口校验：大小 + 扩展名（拖拽不被 <input accept> 约束）
+
     if (file.size > MAX_UPLOAD_BYTES) {
-      showError("文件不能超过 " + fmtBytes(MAX_UPLOAD_BYTES) + "（当前 " + fmtBytes(file.size) + "）");
+      showError("文件不能超过 " + formatSize(MAX_UPLOAD_BYTES) + "（当前 " + formatSize(file.size) + "）");
       return;
     }
     if (!FILE_EXT_RE.test(file.name)) {
       showError("仅支持 .txt / .utf8 / .gbk 等文本文件");
       return;
     }
+
     state.file = file;
     state.fileName = file.name;
     state.fileSize = file.size;
@@ -212,33 +255,22 @@
     els.fileName.textContent = file.name;
     els.fileMeta.textContent = formatSize(file.size);
 
-    els.summaryPlaceholder.hidden = true;
-    els.fileSummary.hidden = false;
-    els.summaryName.textContent = file.name;
-    els.summarySize.textContent = formatSize(file.size);
     els.summaryEncoding.textContent = "待识别";
-
     els.detectBtn.disabled = false;
-    els.flowSource.textContent = file.name;
-    els.flowChapter.textContent = "尚未识别";
-    setStep("source", true);
-    setStep("chapter", false);
-    setStep("convert", false);
 
     hideResult();
-    els.preview.innerHTML =
-      '<div class="preview-message">正在识别章节…</div>';
+    els.preview.innerHTML = '<div class="preview-empty-msg">正在自动识别章节目录…</div>';
     els.chapterCount.textContent = "0 章";
-    updateAction("准备开始", "已选择 " + file.name + "，可识别章节或直接转换。", false);
-    setService("ready", "服务就绪");
+    updateAction("准备开始", "已选择 " + file.name + "，系统正在识别章节。", false);
+    setServiceState("ready", "服务就绪");
 
-    // 选完文件后自动触发章节识别，免去手动点击
+    syncLiveReaderPreview();
     detectChapters();
   }
 
   function clearFile() {
     state.file = null;
-    state.fileName = null;
+    state.fileName = "";
     state.fileSize = 0;
     els.fileInput.value = "";
     els.dropzoneBody.hidden = false;
@@ -246,56 +278,64 @@
     els.dropzone.classList.remove("has-file");
     els.detectBtn.disabled = true;
     els.convertBtn.disabled = true;
-    els.summaryPlaceholder.hidden = false;
-    els.fileSummary.hidden = true;
-    els.preview.innerHTML =
-      '<div class="empty-state">选择 TXT 文件后将自动识别章节，这里会显示目录预览。</div>';
+    
+    els.summaryEncoding.textContent = "待识别";
+    els.preview.innerHTML = '<div class="preview-empty-msg">选择 TXT 文件后将自动识别章节，这里会显示目录预览。</div>';
     els.chapterCount.textContent = "0 章";
-    els.flowSource.textContent = "等待文件";
-    els.flowChapter.textContent = "尚未识别";
-    els.flowConvert.textContent = "等待转换";
-    setStep("source", false);
-    setStep("chapter", false);
-    setStep("convert", false);
+
     hideResult();
-    updateAction("准备开始", "请选择一个 TXT 文件。", false);
-    setService("ready", "服务就绪");
+    updateAction("准备开始", "请选择一个 TXT 文件开始。", false);
+    setServiceState("ready", "服务就绪");
+    syncLiveReaderPreview();
   }
 
   function hideResult() {
     els.result.hidden = true;
-    els.result.classList.remove("is-error");
     els.resultActions.innerHTML = "";
+    els.progressWrap.hidden = true;
+    els.progressBarFill.classList.remove("indeterminate");
+    els.progressBarFill.style.width = "0%";
   }
 
-  /* ---------- 章节识别 ---------- */
+  /* ---------- Chapter Detection ---------- */
 
-  function renderPreview(data) {
+  function renderChapterPreview(data) {
     var titles = data.titles || [];
     els.chapterCount.textContent = titles.length + " 章";
-    els.summaryEncoding.textContent = data.encoding || "utf-8";
+    els.summaryEncoding.textContent = (data.encoding || "utf-8").toUpperCase();
+
+    if (titles.length > 0 && titles[0]) {
+      els.simChapterTitle.textContent = titles[0];
+    } else {
+      els.simChapterTitle.textContent = "第一章 预览章节";
+    }
 
     if (titles.length === 0) {
       els.preview.innerHTML =
-        '<div class="preview-message">未识别到有标题的章节。可能整本书只有一段，或需切换切分方式。</div>';
+        '<div class="preview-empty-msg">未识别到结构化章节。可能整文无明显标记，或需切换切分方式。</div>';
       return;
     }
 
     var html =
-      '<div class="preview-header"><strong>目录预览</strong>' +
-      "<span>共 " + titles.length + " 章 · 编码 " + escapeHtml(data.encoding || "utf-8") + "</span></div>";
-    html += "<ol class=\"chapter-list\">";
-    var shown = 0;
-    var max = 100;
-    for (var i = 0; i < titles.length; i++) {
-      if (shown >= max) break;
-      html += "<li>" + escapeHtml(titles[i]) + "</li>";
-      shown++;
+      '<div class="preview-header">' +
+        '<span>目录提取结果</span>' +
+        '<span>共 ' + titles.length + ' 章 · 编码 ' + escapeHtml(data.encoding || "utf-8") + '</span>' +
+      '</div>';
+    
+    html += '<ul class="chapter-scroll-list">';
+    var max = 120;
+    for (var i = 0; i < titles.length && i < max; i++) {
+      html += '<li class="chapter-item">' +
+                '<span class="chapter-num">' + (i + 1) + '.</span>' +
+                '<span>' + escapeHtml(titles[i]) + '</span>' +
+              '</li>';
     }
     if (titles.length > max) {
-      html += "<li class=\"more\">… 其余 " + (titles.length - max) + " 章省略</li>";
+      html += '<li class="chapter-item" style="color: var(--ink-muted); text-align: center;">' +
+                '… 其余 ' + (titles.length - max) + ' 章省略显示' +
+              '</li>';
     }
-    html += "</ol>";
+    html += '</ul>';
     els.preview.innerHTML = html;
   }
 
@@ -303,8 +343,8 @@
     if (!state.file || state.detecting) return;
     state.detecting = true;
     els.detectBtn.disabled = true;
-    els.preview.innerHTML = '<div class="preview-message">正在识别章节…</div>';
-    setService("ready", "识别中");
+    els.preview.innerHTML = '<div class="preview-empty-msg">正在识别章节中…</div>';
+    setServiceState("busy", "识别中");
 
     fetch("/api/detect", {
       method: "POST",
@@ -319,14 +359,12 @@
       .then(function (r) {
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "识别失败");
-        renderPreview(r.data);
-        els.flowChapter.textContent = "已识别 " + (r.data.titles || []).length + " 章";
-        setStep("chapter", true);
-        updateAction("可以转换", "章节已识别，可调整排版后生成 EPUB。", false);
+        renderChapterPreview(r.data);
+        updateAction("目录识别完成", "已为您解析 " + (r.data.titles || []).length + " 章，可调整排版后生成 EPUB。", false);
+        setServiceState("ready", "服务就绪");
       })
       .catch(function (err) {
         showError(err.message);
-        els.flowChapter.textContent = "识别失败";
       })
       .finally(function () {
         state.detecting = false;
@@ -334,53 +372,47 @@
       });
   }
 
-  /* ---------- 转换（同步 + 异步轮询） ---------- */
+  /* ---------- Book Conversion & Polling ---------- */
 
   function showResult(data) {
-    // 同源校验：防止后端异常返回外部 URL 被用作开放重定向/钓鱼
-    // 先校验再渲染，避免先显示成功再报错
     var dl = data.download || "";
     if (dl && dl.indexOf("/api/download/") !== 0) {
       throw new Error("下载链接非法");
     }
 
     els.result.hidden = false;
-    els.result.classList.remove("is-error");
-    els.resultKicker.textContent = "转换完成";
-    els.resultTitle.textContent = "电子书已准备好";
+    els.resultTitle.textContent = "EPUB 电子书已就绪";
     els.resultMeta.textContent =
       (data.epubName || "book.epub") +
-      " · " + (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "utf-8");
+      " · " + (data.chapters || 0) + " 章 · 编码 " + (data.encoding || "utf-8").toUpperCase();
+    
     els.resultActions.innerHTML = "";
-
     var a = document.createElement("a");
-    a.className = "download-link";
+    a.className = "download-btn-giant";
     a.href = dl;
     if (data.epubName) a.setAttribute("download", data.epubName);
-    var span = document.createElement("span");
-    span.textContent = "下载 " + (data.epubName || "EPUB");
-    var arrow = document.createElement("span");
-    arrow.textContent = "↓";
-    a.appendChild(span);
-    a.appendChild(arrow);
+    a.innerHTML = '<span>下载 ' + escapeHtml(data.epubName || "EPUB") + '</span> <span>↓</span>';
     els.resultActions.appendChild(a);
 
-    els.flowConvert.textContent = "已生成 " + (data.epubName || "EPUB");
-    setStep("convert", true);
-    updateAction("完成", "点击「下载 " + (data.epubName || "EPUB") + "」保存文件。", false);
-    setService("ready", "服务就绪");
+    els.progressWrap.hidden = true;
+    updateAction("生成完毕", "可点击按钮下载 EPUB 电子书。", false);
+    setServiceState("ready", "服务就绪");
   }
 
   function pollJob(jobId) {
     var ticks = 0;
+    els.progressWrap.hidden = false;
+    els.progressBarFill.classList.add("indeterminate");
+
     var tick = function () {
       if (ticks++ >= POLL_MAX_TICKS) {
         state.pollTimer = null;
-        els.flowConvert.textContent = "转换超时";
-        showError("转换超时，请重试或拆分大文件（约定 " + (POLL_MAX_TICKS * 2) + " 秒上限）");
-        updateAction("超时", "请重试或拆分大文件。", false);
+        state.converting = false;
+        showError("转换超时，请重试或拆分超大文件");
+        updateAction("转换超时", "请重试或拆分大文件。", false);
         return;
       }
+
       fetch("/api/jobs/" + encodeURIComponent(jobId), { headers: apiHeaders() })
         .then(function (res) {
           return res.json().then(function (data) {
@@ -391,6 +423,7 @@
           if (r.status === 401) { redirectToAuth(); return; }
           if (!r.ok) throw new Error(r.data.error || "任务查询失败");
           var data = r.data;
+
           if (data.status === "done") {
             state.pollTimer = null;
             state.converting = false;
@@ -402,15 +435,14 @@
             state.converting = false;
             throw new Error(data.error || "转换失败");
           }
-          els.flowConvert.textContent =
-            data.status === "running" ? "正在转换…" : "排队中…";
-          updateAction("转换中", "文件较大，正在后台转换，请稍候…", true);
+
+          var msg = data.status === "running" ? "后台正在高效打包 EPUB..." : "任务已排队，请稍候...";
+          updateAction("后台转换中", msg, true);
           state.pollTimer = setTimeout(tick, 2000);
         })
         .catch(function (err) {
           state.pollTimer = null;
           state.converting = false;
-          els.flowConvert.textContent = "转换失败";
           showError(err.message);
           updateAction("出错了", "请重试或更换文件。", false);
         });
@@ -423,12 +455,12 @@
     state.converting = true;
     els.convertBtn.disabled = true;
     hideResult();
-    els.flowConvert.textContent = "正在转换…";
-    setStep("convert", false);
-    setStep("layout", true);
-    els.flowLayout.textContent = "使用当前参数";
-    updateAction("转换中", "正在生成 EPUB…", true);
-    setService("ready", "转换中");
+
+    els.progressWrap.hidden = false;
+    els.progressBarFill.classList.remove("indeterminate");
+    els.progressBarFill.style.width = "35%";
+    updateAction("正在生成", "系统正在构建 EPUB 文件及样式表...", true);
+    setServiceState("busy", "转换中");
 
     fetch("/api/convert", {
       method: "POST",
@@ -444,10 +476,9 @@
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "转换失败");
         var data = r.data;
+
         if (data.async) {
-          // 大文件：异步任务，轮询 /api/jobs/:id
-          // 保持 state.converting=true，直到 pollJob done/error 才置 false
-          els.progress.textContent = "文件较大，已创建异步任务（" + data.jobId + "）…";
+          els.progress.textContent = "文件较大，已转为异步后台生成（Job ID: " + data.jobId + "）...";
           pollJob(data.jobId);
         } else {
           state.converting = false;
@@ -456,48 +487,49 @@
       })
       .catch(function (err) {
         state.converting = false;
-        els.flowConvert.textContent = "转换失败";
         showError(err.message);
         updateAction("出错了", "请重试或更换文件。", false);
-        setService("error", "转换失败");
+        setServiceState("error", "转换失败");
       });
   }
 
-  /* ---------- 事件绑定 ---------- */
+  /* ---------- Event Listeners & Bindings ---------- */
 
-  els.chooseBtn.addEventListener("click", function () {
-    els.fileInput.click();
-  });
-  els.changeFileBtn.addEventListener("click", function () {
-    els.fileInput.click();
-  });
+  // File Choice Buttons
+  els.chooseBtn.addEventListener("click", function () { els.fileInput.click(); });
+  els.changeFileBtn.addEventListener("click", function () { els.fileInput.click(); });
+  
   els.fileInput.addEventListener("change", function () {
     if (els.fileInput.files && els.fileInput.files.length > 0) {
       setFile(els.fileInput.files[0]);
     }
   });
 
+  // Drag and Drop Handling
   ["dragenter", "dragover"].forEach(function (ev) {
     els.dropzone.addEventListener(ev, function (e) {
       e.preventDefault();
       els.dropzone.classList.add("dragover");
     });
   });
+
   ["dragleave", "drop"].forEach(function (ev) {
     els.dropzone.addEventListener(ev, function (e) {
       e.preventDefault();
       els.dropzone.classList.remove("dragover");
     });
   });
+
   els.dropzone.addEventListener("drop", function (e) {
     var files = e.dataTransfer && e.dataTransfer.files;
     if (files && files.length > 0) setFile(files[0]);
   });
+
   els.dropzone.addEventListener("click", function (e) {
     if (e.target === els.chooseBtn || e.target === els.changeFileBtn) return;
     els.fileInput.click();
   });
-  // 键盘可达性：dropzone 是 role=button，需响应 Enter/Space
+
   els.dropzone.addEventListener("keydown", function (e) {
     if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
       e.preventDefault();
@@ -505,8 +537,33 @@
     }
   });
 
+  // Segmented Control Sync for Chapter Mode
+  if (els.modeSegments) {
+    var segmentBtns = els.modeSegments.querySelectorAll(".segment-btn");
+    segmentBtns.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var val = btn.dataset.value;
+        segmentBtns.forEach(function (b) { b.classList.toggle("active", b === btn); });
+        els.chapterMode.value = val;
+        
+        els.fullRegField.hidden = val !== "custom";
+        els.fullReg.disabled = val !== "custom";
+        els.splitCountField.hidden = val !== "count";
+
+        if (state.file) detectChapters();
+      });
+    });
+  }
+
+  // Checkbox Field Visibility Toggles
+  els.addSpace.addEventListener("change", function () {
+    els.addSpaceCountField.hidden = !els.addSpace.checked;
+  });
+
+  // Action Buttons
   els.detectBtn.addEventListener("click", detectChapters);
   els.convertBtn.addEventListener("click", convertBook);
+  
   els.resetBtn.addEventListener("click", function () {
     if (state.pollTimer) {
       clearTimeout(state.pollTimer);
@@ -515,55 +572,33 @@
     clearFile();
   });
 
-  // 切分方式联动
-  els.chapterMode.addEventListener("change", function () {
-    var mode = els.chapterMode.value;
-    els.fullRegField.hidden = mode !== "custom";
-    els.fullReg.disabled = mode !== "custom";
-    els.splitCountField.hidden = mode !== "count";
-  });
-  els.addSpace.addEventListener("change", function () {
-    els.addSpaceCountField.hidden = !els.addSpace.checked;
-  });
-
-  // 排版改动后重置结果与步骤 4 状态
+  // Real-time Inputs Sync for Reader Simulator
   [
-    els.lineHeight,
-    els.fontSize,
-    els.marginTop,
-    els.indent,
-    els.textAlign,
-    els.title,
-    els.author,
-    els.chapterMode,
-    els.fullReg,
-    els.splitCount,
-    els.removeBlank,
-    els.addSpace,
-    els.addSpaceCount,
-  ].forEach(function (el) {
-    el.addEventListener("input", function () {
-      els.flowLayout.textContent = "使用当前参数";
-      setStep("layout", true);
-      hideResult();
-    });
+    els.title, els.author, els.lineHeight, els.fontSize,
+    els.marginTop, els.indent, els.textAlign
+  ].forEach(function (input) {
+    if (!input) return;
+    input.addEventListener("input", syncLiveReaderPreview);
   });
 
-  // 回车不触发表单提交
+  // Prevent Form Submit on Enter Key
   document.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && e.target && e.target.tagName === "INPUT") {
       e.preventDefault();
     }
   });
 
-  // 启动时验证 token：若启用了 ACCESS_TOKEN 但当前无 token 或 token 无效 → 跳登录
+  // Initial Auth Verification Check
   (function checkAuthOnBoot() {
     fetch("/api/auth/verify", { headers: apiHeaders() })
       .then(function (res) {
         if (res.status === 401) redirectToAuth();
       })
-      .catch(function () { /* 网络错误不强制跳转，避免离线场景无法使用 */ });
+      .catch(function () { /* Network error grace fallback */ });
   })();
 
-  updateAction("准备开始", "请选择一个 TXT 文件。", false);
+  // Initial Sync
+  syncLiveReaderPreview();
+  updateAction("准备开始", "请选择一个 TXT 文件开始。", false);
+
 })();

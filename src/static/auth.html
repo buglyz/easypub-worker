@@ -3,25 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#2f6f5e">
-<title>EasyPub · 登录</title>
+<meta name="theme-color" content="#1b4332">
+<title>EasyPub · 身份验证</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="auth-body">
   <div class="auth-card">
     <div class="auth-brand">
-      <span class="brand-mark" aria-hidden="true">EP</span>
+      <span class="brand-icon" aria-hidden="true">EP</span>
       <strong>EasyPub</strong>
     </div>
     <h1 class="auth-title">请输入访问令牌</h1>
-    <p class="auth-sub">本服务已启用访问控制，请输入管理员分配的 Token。</p>
+    <p class="auth-sub">本服务已启用安全访问控制，请输入管理员分配的 Access Token。</p>
     <form id="authForm" class="auth-form" autocomplete="off">
-      <input type="password" id="tokenInput" class="auth-input"
-             placeholder="粘贴 Token…" autocomplete="current-password" required>
-      <button type="submit" class="btn btn-primary auth-submit" id="authBtn">进入</button>
+      <input type="password" id="tokenInput" class="input"
+             placeholder="粘贴 Token 密钥…" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-primary btn-lg" id="authBtn" style="width: 100%;">进入工作台</button>
     </form>
     <p class="auth-error" id="authError" role="alert" hidden></p>
-    <p class="auth-hint">Token 会保存在当前浏览器会话中，关闭标签页后失效。<br>也可通过 URL 参数 <code>?token=xxx</code> 直接进入。</p>
+    <p class="auth-hint">
+      Token 将仅在当前浏览器 Session 会话中有效。<br>
+      亦可通过 URL 参数 <code>?token=YOUR_TOKEN</code> 快速验证。
+    </p>
   </div>
   <script src="/auth.js"></script>
 </body>
