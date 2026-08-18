@@ -127,9 +127,12 @@ export function securityHeaders(h: Headers): void {
     "max-age=63072000; includeSubDomains; preload"
   );
   h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // 注意:style-src 需 'unsafe-inline' 以兼容前端内联样式与 JS 动态样式
+  // (页面大量 style="..." 属性 / element.style.xxx / 动态注入 <style>,
+  //  见 index.html / auth.html / app.js)。script-src 保持 'self',XSS 主防线不变。
   h.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
   );
 }
 

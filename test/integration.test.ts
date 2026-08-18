@@ -407,4 +407,68 @@ describe("Worker 集成（本地 R2 桩点）", () => {
     expect(data.ok).toBe(true);
     expect(data.enabled).toBe(true);
   });
+
+  it("/api/auth/verify:不支持的 HTTP 方法返回 405", async () => {
+    const env = makeEnv(new Map(), { ACCESS_TOKEN: "" });
+    const res = await worker.fetch(
+      new Request("https://easypub.test/api/auth/verify", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(res.status).toBe(405);
+  });
+
+  it("异步任务 pending 卡住超过阈值标记 error(stale 检测)", async () => {
+    const store = new Map();
+    const env = makeEnv(store);
+    // 直接预置一个很久前创建的 pending job,模拟 waitUntil 未启动导致永久 pending
+    const jobId = "20250101-120000-" + "a".repeat(32);
+    const old = new Date(Date.now() - 200000).toISOString();
+    store.set(`jobs/${jobId}.json`, {
+      value: JSON.stringify({
+        jobId,
+        status: "pending",
+        originalName: "stale.txt",
+        epubName: "stale.epub",
+        createdAt: old,
+        updatedAt: old,
+        async: true,
+      }),
+      opts: {},
+    });
+
+    const jobRes = await worker.fetch(
+      new Request("https://easypub.test/api/jobs/" + jobId),
+      env,
+      {} as ExecutionContext
+    );
+    expect(jobRes.status).toBe(200);
+    const job = (await jobRes.json()) as { status: string; error?: string };
+    expect(job.status).toBe("error");
+    expect(job.error).toContain("未启动");
+
+    // 近期才创建的 pending job 不应被标记 error
+    store.set(`jobs/${jobId}.json`, {
+      value: JSON.stringify({
+        jobId,
+        status: "pending",
+        originalName: "stale.txt",
+        epubName: "stale.epub",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        async: true,
+      }),
+      opts: {},
+    });
+    const freshRes = await worker.fetch(
+      new Request("https://easypub.test/api/jobs/" + jobId),
+      env,
+      {} as ExecutionContext
+    );
+    const fresh = (await freshRes.json()) as { status: string };
+    expect(fresh.status).toBe("pending");
+  });
 });

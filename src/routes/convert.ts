@@ -205,6 +205,15 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
       meta.updatedAt = new Date().toISOString();
       await putJob(env, meta);
     }
+  } else if (meta.status === "pending" && meta.createdAt) {
+    // pending 卡住(waitUntil 未启动/启动前崩溃)同样 stale 标记 error,防前端无限轮询
+    const ageSeconds = (Date.now() - new Date(meta.createdAt).getTime()) / 1000;
+    if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
+      meta.status = "error";
+      meta.error = "后台任务未启动,请重试";
+      meta.updatedAt = new Date().toISOString();
+      await putJob(env, meta);
+    }
   }
 
   const body: Record<string, unknown> = {

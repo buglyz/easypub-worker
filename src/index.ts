@@ -64,6 +64,10 @@ export default {
         if (path === "/api/auth/verify") {
           // 登录页验证 Token：已配置 ACCESS_TOKEN 时校验头；未配置直接返回 200
           // （登录页据此区分"未启用鉴权"与"token 错"两种场景）
+          // 只接受 GET(主页自检)/ POST(登录页验证)/ HEAD,其余方法 405
+          if (request.method !== "GET" && request.method !== "POST" && request.method !== "HEAD") {
+            return withSecurity(jsonResponse({ error: "method not allowed" }, 405));
+          }
           if (!env.ACCESS_TOKEN) {
             return withSecurity(jsonResponse({ ok: true, enabled: false }, 200));
           }
