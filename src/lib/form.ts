@@ -105,17 +105,70 @@ export function jsonResponse(data: unknown, status = 200, extraHeaders?: Headers
   return new Response(JSON.stringify(data), { status, headers });
 }
 
-export function safeErr(err: unknown): string {
+export type ErrorStage = "request" | "convert" | "storage";
+
+export interface PublicError {
+  code: "INVALID_INPUT" | "RESOURCE_LIMIT" | "STORAGE_ERROR" | "CONVERT_ERROR";
+  message: string;
+  status: 400 | 500 | 503;
+}
+
+function compactErrorMessage(err: unknown): string {
   if (err == null) return "未知错误";
-  const msg = err instanceof Error ? err.message : String(err);
-  let m = msg.length > 200 ? msg.slice(0, 200) : msg;
-  if (m.includes(":\\") || m.includes("/")) {
-    if (m.includes("解析上传") || m.includes("multipart")) return "上传失败或文件过大";
-    if (m.includes("编码")) return "编码识别失败";
-    if (m.includes("文件")) return "文件处理失败";
-    return "请求无效";
+  const raw = err instanceof Error ? err.message : String(err);
+  const message = raw.replace(/\s+/g, " ").trim();
+  if (!message) return "未知错误";
+  // 只返回 message，不返回 stack；同时隐藏常见本地路径，避免泄露运行环境信息。
+  const withoutPath = message.replace(/(?:[A-Za-z]:\\|\\\\)[^ ]+/g, "[内部路径]");
+  return withoutPath.length > 240 ? withoutPath.slice(0, 240) + "…" : withoutPath;
+}
+
+function isInputError(message: string): boolean {
+  return /multipart|解析上传|缺少文件字段|文件超过|编码|无法识别编码|正则编译失败|P3 编译失败|invalid SplitMode/i.test(
+    message
+  );
+}
+
+function isResourceError(message: string): boolean {
+  return /exceeded resource limits|exceeded memory|memory limit|cpu time|out of memory|heap out of memory/i.test(
+    message
+  );
+}
+
+function storageMessage(message: string): string {
+  if (/accessdenied|unauthorized|permission|forbidden/i.test(message)) {
+    return "EPUB 已生成，但 R2 写入被拒绝，请检查 BUCKET 绑定和存储桶权限。";
   }
-  return m;
+  if (/nosuchbucket|bucket.*not found|not found/i.test(message)) {
+    return "EPUB 已生成，但找不到 R2 存储桶，请检查 BUCKET 绑定和 bucket_name 配置。";
+  }
+  if (/undefined.*put|cannot read.*put|BUCKET/i.test(message)) {
+    return "EPUB 已生成，但 R2 绑定不可用，请检查变量名是否为 BUCKET。";
+  }
+  return `EPUB 已生成，但保存到 R2 失败：${message}`;
+}
+
+/** 将内部异常转换为可展示的错误，不返回堆栈、密钥或服务器路径。 */
+export function toPublicError(err: unknown, stage: ErrorStage = "request"): PublicError {
+  const detail = compactErrorMessage(err);
+  if (isInputError(detail)) {
+    return { code: "INVALID_INPUT", message: detail, status: 400 };
+  }
+  if (isResourceError(detail)) {
+    return {
+      code: "RESOURCE_LIMIT",
+      message: `Worker 资源不足，转换未完成：${detail}`,
+      status: 503,
+    };
+  }
+  if (stage === "storage") {
+    return { code: "STORAGE_ERROR", message: storageMessage(detail), status: 503 };
+  }
+  return { code: "CONVERT_ERROR", message: `转换失败：${detail}`, status: 500 };
+}
+
+export function safeErr(err: unknown): string {
+  return toPublicError(err).message;
 }
 
 export function securityHeaders(h: Headers): void {

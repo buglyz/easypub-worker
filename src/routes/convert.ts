@@ -1,6 +1,11 @@
 import type { Env } from "../env";
 import { numEnv } from "../env";
-import { parseMultipart, jsonResponse, safeErr } from "../lib/form";
+import {
+  parseMultipart,
+  jsonResponse,
+  toPublicError,
+  type ErrorStage,
+} from "../lib/form";
 import { runConvert } from "../lib/convert-core";
 import { displayNameFromUpload, newJobId } from "../lib/names";
 import {
@@ -36,7 +41,8 @@ export async function handleConvert(
   try {
     up = await parseMultipart(request, maxUpload);
   } catch (err) {
-    return jsonResponse({ error: safeErr(err) }, 400);
+    const info = toPublicError(err, "request");
+    return jsonResponse({ error: info.message, code: info.code }, info.status);
   }
 
   const jobId = newJobId();
@@ -86,6 +92,7 @@ export async function handleConvert(
   }
 
   // 小文件：同步
+  let stage: ErrorStage = "convert";
   try {
     const result = runConvert({
       text: up.text,
@@ -96,6 +103,7 @@ export async function handleConvert(
       txtOpt: up.txtOpt,
       cssOpt: up.cssOpt,
     });
+    stage = "storage";
     await putEpub(env, jobId, result.epub, epubName);
     const done: JobMeta = {
       jobId,
@@ -122,8 +130,9 @@ export async function handleConvert(
       jobId,
     });
   } catch (err) {
-    console.error("convert error", err);
-    return jsonResponse({ error: "转换失败" }, 500);
+    const info = toPublicError(err, stage);
+    console.error("convert error", { stage, code: info.code, error: err });
+    return jsonResponse({ error: info.message, code: info.code, stage }, info.status);
   }
 }
 
@@ -139,6 +148,7 @@ async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void>
   meta.updatedAt = meta.startedAt;
   await putJob(env, meta);
 
+  let stage: ErrorStage = "storage";
   try {
     const optsObj = await env.BUCKET.get(optsKey(jobId));
     if (!optsObj) throw new Error("missing job opts");
@@ -152,6 +162,7 @@ async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void>
       fileName: string;
     };
 
+    stage = "convert";
     const result = runConvert({
       text,
       fileName: opts.fileName,
@@ -162,6 +173,7 @@ async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void>
       cssOpt: opts.cssOpt,
     });
 
+    stage = "storage";
     await putEpub(env, jobId, result.epub, meta.epubName);
     meta = await getJob(env, jobId);
     if (!meta) return;
@@ -171,11 +183,12 @@ async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void>
     meta.updatedAt = new Date().toISOString();
     await putJob(env, meta);
   } catch (err) {
-    console.error("async convert error", err);
+    const info = toPublicError(err, stage);
+    console.error("async convert error", { stage, code: info.code, error: err });
     meta = await getJob(env, jobId);
     if (!meta) return;
     meta.status = "error";
-    meta.error = "转换失败";
+    meta.error = info.message;
     meta.updatedAt = new Date().toISOString();
     await putJob(env, meta);
     // 抛出以便触发 ctx.waitUntil 失败日志（Workers 会记为 unhandled rejection）
