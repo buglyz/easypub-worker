@@ -26,6 +26,18 @@ export function defaultCss(partial?: Partial<CssOptions>): CssOptions {
   };
 }
 
+/** 从网页表单字段构建 CSS 选项，供 Worker API 与浏览器本地 Worker 共用。 */
+export function cssOptionsFromFields(fields: Record<string, string>): CssOptions {
+  return defaultCss({
+    lineHeight: clampInt(parseInt(fields.lineHeight || "0", 10) || 0, 50, 300, 120),
+    fontSize: clampInt(parseInt(fields.fontSize || "0", 10) || 0, 50, 300, 100),
+    marginTop: clampInt(parseInt(fields.marginTop || "0", 10) || 0, 0, 50, 5),
+    textAlign: clampInt(parseInt(fields.textAlign || "0", 10) || 0, 0, 3, 0),
+    indent: clampFloat(parseFloat(fields.indent || "0") || 0, 0, 4, 0),
+    customCss: (fields.customCss || "").slice(0, 10000),
+  });
+}
+
 export function generateCss(o: CssOptions): string {
   if (!o.fontFamily) o.fontFamily = "easypub";
   if (!Number.isFinite(o.lineHeight) || o.lineHeight <= 0) o.lineHeight = 120;

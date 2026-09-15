@@ -1,6 +1,6 @@
 import { detectAndDecode } from "./encoding";
 import { optionsFromForm, type TxtOptions } from "./txt-parse";
-import { clampFloat, clampInt, defaultCss, type CssOptions } from "./css";
+import { cssOptionsFromFields, type CssOptions } from "./css";
 
 export interface UploadParse {
   text: string;
@@ -77,14 +77,7 @@ export async function parseMultipart(
   }
 
   const txtOpt = optionsFromForm(fields);
-  const cssOpt = defaultCss({
-    lineHeight: clampInt(parseInt(fields.lineHeight || "0", 10) || 0, 50, 300, 120),
-    fontSize: clampInt(parseInt(fields.fontSize || "0", 10) || 0, 50, 300, 100),
-    marginTop: clampInt(parseInt(fields.marginTop || "0", 10) || 0, 0, 50, 5),
-    textAlign: clampInt(parseInt(fields.textAlign || "0", 10) || 0, 0, 3, 0),
-    indent: clampFloat(parseFloat(fields.indent || "0") || 0, 0, 4, 0),
-    customCss: (fields.customCss || "").slice(0, 10000),
-  });
+  const cssOpt = cssOptionsFromFields(fields);
 
   return {
     text: decoded.text,

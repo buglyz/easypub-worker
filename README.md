@@ -5,6 +5,7 @@ TXT → EPUB 的 Cloudflare Workers 部署形态，与 [Go 版 easypub](https://
 - 前端：拖拽上传 → 识别章节 → 排版 → 转换下载（带登录页鉴权）
 - 核心逻辑：TypeScript 移植 Go 版 `internal/txt`（章节识别）、`internal/epub`（EPUB 2.0 打包）、`internal/css`（中文排版样式）
 - 存储：R2 存临时 TXT 与生成的 EPUB，产物 24h 过期（bucket lifecycle）
+- 本地优先：浏览器 Web Worker 使用本机 CPU 转换，失败或浏览器不支持时自动回退 Cloudflare
 - 大文件：小文件同步转换；超过阈值走异步 job（`waitUntil` 后台转换 + 前端轮询 `/api/jobs/:id`）
 - 安全：可选 `ACCESS_TOKEN` 鉴权 + 网页登录页 + 128bit jobId 防枚举 + 严格 CSP/HSTS 安全头
 
@@ -14,6 +15,8 @@ TXT → EPUB 的 Cloudflare Workers 部署形态，与 [Go 版 easypub](https://
 easypub-worker/
 ├── wrangler.toml        # Worker 配置：R2 binding、vars、静态资源
 ├── package.json
+├── scripts/
+│   └── build-local.mjs  # 打包浏览器本地转换 Worker
 ├── tsconfig.json
 ├── vitest.config.ts
 ├── src/
@@ -36,6 +39,8 @@ easypub-worker/
 │       ├── index.html   # 主工作台
 │       ├── auth.html    # 登录页（启用 ACCESS_TOKEN 时使用）
 │       ├── app.js       # 主页逻辑（含 401 自动跳登录）
+│       ├── local-first.js # 本地优先 fetch 适配与 Cloudflare 回退
+│       ├── local-worker.js # 浏览器本地转换 bundle（自动生成）
 │       ├── auth.js      # 登录页逻辑（验证 → sessionStorage → 跳回）
 │       ├── style.css    # 样式
 │       └── _headers     # 静态资源安全头
@@ -108,8 +113,10 @@ npx wrangler secret put ACCESS_TOKEN
 ### 4. 发布
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
+
+`npm run deploy` 会先执行 `build:local`，把现有 TypeScript 转换核心打包为浏览器 Worker，再发布静态资源和 Cloudflare Worker。若直接使用 `npx wrangler deploy`，请先执行一次 `npm run build:local`。
 
 输出会给出 `https://easypub.<子域>.workers.dev`。
 
@@ -130,7 +137,7 @@ npx wrangler deployments list          # 查看当前部署
 1. 进入 Cloudflare Dashboard → Workers & Pages → **Create** → **Import a repository**
 2. 选择 GitHub 账号与 `buglyz/easypub-worker` 仓库
 3. **Production branch** 填 `main`
-4. 构建配置可留空（wrangler 会自动识别 `wrangler.toml`）
+4. 构建命令填写 `npm run build:local`；部署命令按项目集成方式填写 `npx wrangler deploy`
 5. 在 **Settings → Bindings** 里手动添加：
    - **R2 bucket**：变量名 `BUCKET`，桶名 `easypub`（需先在 R2 创建）
 6. 在 **Settings → Variables and Secrets** 添加：
@@ -149,6 +156,8 @@ npx wrangler deployments list          # 查看当前部署
 表单字段（对齐 Go WebUI）：`title`、`author`、`splitMode`(0正则/1按字数/2整本)、`splitCount`、`fullReg`、`autoMark`、`removeBlank`、`addSpace`、`addSpaceCount`、`lineHeight`、`fontSize`、`marginTop`、`textAlign`、`indent`。**不接受** `configPath` / `enableMobi`。
 
 ## 限制与降级策略
+
+网页会优先在本机转换，成功时 TXT 不会上传；浏览器不支持 Web Worker、GBK 解码或本地转换异常时，才会将原请求回退到 Cloudflare。浏览器页面关闭、手机切到后台或系统回收页面时，本地任务可能中断。
 
 | 项 | 限制 | 说明 |
 |---|---|---|

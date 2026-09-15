@@ -413,7 +413,8 @@
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "识别失败");
         renderChapterPreview(r.data);
-        updateAction("目录识别完成", "已为您解析 " + (r.data.titles || []).length + " 章，可调整排版后生成 EPUB。", false);
+        var detectSource = r.data.local ? "文件未上传，已在本机完成识别。" : "可调整排版后生成 EPUB。";
+        updateAction("目录识别完成", "已为您解析 " + (r.data.titles || []).length + " 章，" + detectSource, false);
         setServiceState("ready", "服务就绪");
       })
       .catch(function (err) {
@@ -429,7 +430,8 @@
 
   function showResult(data) {
     var dl = data.download || "";
-    if (dl && dl.indexOf("/api/download/") !== 0) {
+    var localDownload = data.local === true && dl.indexOf("/api/local-download/") === 0;
+    if (dl && dl.indexOf("/api/download/") !== 0 && !localDownload) {
       throw new Error("下载链接非法");
     }
 
@@ -480,7 +482,11 @@
     els.resultActions.appendChild(btn);
 
     els.progressWrap.hidden = true;
-    updateAction("生成完毕", "可点击按钮下载 EPUB 电子书。", false);
+    updateAction(
+      "生成完毕",
+      data.local ? "已使用本机 CPU 完成转换，文件未上传。" : "可点击按钮下载 EPUB 电子书。",
+      false
+    );
     setServiceState("ready", "服务就绪");
   }
 
@@ -540,7 +546,7 @@
     els.progressWrap.hidden = false;
     els.progressBarFill.classList.remove("indeterminate");
     els.progressBarFill.style.width = "35%";
-    updateAction("正在生成", "系统正在构建 EPUB 文件及样式表...", true);
+    updateAction("正在生成", "优先使用本机 CPU 构建 EPUB；本地不可用时自动切换云端。", true);
     setServiceState("busy", "转换中");
 
     fetch("/api/convert", {
