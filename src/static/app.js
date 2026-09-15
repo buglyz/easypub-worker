@@ -38,6 +38,28 @@
     return h;
   }
 
+  function readApiResponse(res) {
+    return res.text().then(function (body) {
+      var data;
+      try {
+        data = body ? JSON.parse(body) : {};
+      } catch (e) {
+        // Cloudflare/WAF 错误页通常是 HTML；不要把 JSON 解析异常展示给用户。
+        var preview = String(body || "")
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 180);
+        var message = "服务器返回了非 JSON 响应（HTTP " + res.status + "）";
+        if (preview) message += "：" + preview;
+        data = { error: message, code: "NON_JSON_RESPONSE" };
+      }
+      return { ok: res.ok, status: res.status, data: data };
+    });
+  }
+
   // DOM Helper
   var $ = function (id) {
     return document.getElementById(id);
@@ -386,11 +408,7 @@
       headers: apiHeaders(),
       body: buildFormData(),
     })
-      .then(function (res) {
-        return res.json().then(function (data) {
-          return { ok: res.ok, status: res.status, data: data };
-        });
-      })
+      .then(readApiResponse)
       .then(function (r) {
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "识别失败");
@@ -481,11 +499,7 @@
       }
 
       fetch("/api/jobs/" + encodeURIComponent(jobId), { headers: apiHeaders() })
-        .then(function (res) {
-          return res.json().then(function (data) {
-            return { ok: res.ok, status: res.status, data: data };
-          });
-        })
+        .then(readApiResponse)
         .then(function (r) {
           if (r.status === 401) { redirectToAuth(); return; }
           if (!r.ok) throw new Error(r.data.error || "任务查询失败");
@@ -534,11 +548,7 @@
       headers: apiHeaders(),
       body: buildFormData(),
     })
-      .then(function (res) {
-        return res.json().then(function (data) {
-          return { ok: res.ok, status: res.status, data: data };
-        });
-      })
+      .then(readApiResponse)
       .then(function (r) {
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "转换失败");
