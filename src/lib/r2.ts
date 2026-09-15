@@ -8,6 +8,8 @@ export interface JobMeta {
   encoding?: string;
   chapters?: number;
   error?: string;
+  errorCode?: "INVALID_INPUT" | "RESOURCE_LIMIT" | "STORAGE_ERROR" | "CONVERT_ERROR";
+  errorStage?: "request" | "input" | "convert" | "storage";
   createdAt: string;
   updatedAt: string;
   /** 异步任务进入 running 的时间，用于 stale 检测 */
@@ -95,6 +97,10 @@ export async function getEpub(
 ): Promise<R2ObjectBody | null> {
   // R2 GET 支持 range 参数，类型由 @cloudflare/workers-types 提供
   return range ? env.BUCKET.get(outputKey(jobId), { range }) : env.BUCKET.get(outputKey(jobId));
+}
+
+export async function headEpub(env: Env, jobId: string): Promise<R2Object | null> {
+  return env.BUCKET.head(outputKey(jobId));
 }
 
 /** 删除临时 upload 与 opts 对象（异步任务结束后的清理）。失败忽略。 */

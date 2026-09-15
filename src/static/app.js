@@ -135,7 +135,18 @@
     detecting: false,
     converting: false,
     pollTimer: null,
+    operationId: 0,
   };
+
+  function invalidateOperation() {
+    state.operationId += 1;
+    if (state.pollTimer) {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+    }
+    state.detecting = false;
+    state.converting = false;
+  }
 
   /* ---------- Utility Functions ---------- */
 
@@ -302,6 +313,7 @@
       return;
     }
 
+    invalidateOperation();
     state.file = file;
     state.fileName = file.name;
     state.fileSize = file.size;
@@ -326,6 +338,7 @@
   }
 
   function clearFile() {
+    invalidateOperation();
     state.file = null;
     state.fileName = "";
     state.fileSize = 0;
@@ -347,6 +360,7 @@
   }
 
   function hideResult() {
+    if (window.easyPubClearLocalOutput) window.easyPubClearLocalOutput();
     els.result.hidden = true;
     els.resultActions.innerHTML = "";
     els.progressWrap.hidden = true;
@@ -398,6 +412,7 @@
 
   function detectChapters() {
     if (!state.file || state.detecting) return;
+    var operationId = state.operationId;
     state.detecting = true;
     els.detectBtn.disabled = true;
     els.preview.innerHTML = '<div class="preview-empty-msg">正在识别章节中…</div>';
@@ -410,6 +425,7 @@
     })
       .then(readApiResponse)
       .then(function (r) {
+        if (operationId !== state.operationId) return;
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "识别失败");
         renderChapterPreview(r.data);
@@ -418,9 +434,11 @@
         setServiceState("ready", "服务就绪");
       })
       .catch(function (err) {
+        if (operationId !== state.operationId) return;
         showError(err.message);
       })
       .finally(function () {
+        if (operationId !== state.operationId) return;
         state.detecting = false;
         els.detectBtn.disabled = !state.file;
       });
@@ -490,12 +508,13 @@
     setServiceState("ready", "服务就绪");
   }
 
-  function pollJob(jobId) {
+  function pollJob(jobId, operationId) {
     var ticks = 0;
     els.progressWrap.hidden = false;
     els.progressBarFill.classList.add("indeterminate");
 
     var tick = function () {
+      if (operationId !== state.operationId) return;
       if (ticks++ >= POLL_MAX_TICKS) {
         state.pollTimer = null;
         state.converting = false;
@@ -507,6 +526,7 @@
       fetch("/api/jobs/" + encodeURIComponent(jobId), { headers: apiHeaders() })
         .then(readApiResponse)
         .then(function (r) {
+          if (operationId !== state.operationId) return;
           if (r.status === 401) { redirectToAuth(); return; }
           if (!r.ok) throw new Error(r.data.error || "任务查询失败");
           var data = r.data;
@@ -528,6 +548,7 @@
           state.pollTimer = setTimeout(tick, 2000);
         })
         .catch(function (err) {
+          if (operationId !== state.operationId) return;
           state.pollTimer = null;
           state.converting = false;
           showError(err.message);
@@ -539,6 +560,7 @@
 
   function convertBook() {
     if (!state.file || state.converting) return;
+    var operationId = state.operationId;
     state.converting = true;
     els.convertBtn.disabled = true;
     hideResult();
@@ -556,19 +578,21 @@
     })
       .then(readApiResponse)
       .then(function (r) {
+        if (operationId !== state.operationId) return;
         if (r.status === 401) { redirectToAuth(); return; }
         if (!r.ok) throw new Error(r.data.error || "转换失败");
         var data = r.data;
 
         if (data.async) {
           els.progress.textContent = "文件较大，已转为异步后台生成（Job ID: " + data.jobId + "）...";
-          pollJob(data.jobId);
+          pollJob(data.jobId, operationId);
         } else {
           state.converting = false;
           showResult(data);
         }
       })
       .catch(function (err) {
+        if (operationId !== state.operationId) return;
         state.converting = false;
         showError(err.message);
         updateAction("出错了", "请重试或更换文件。", false);
@@ -648,10 +672,6 @@
   els.convertBtn.addEventListener("click", convertBook);
   
   els.resetBtn.addEventListener("click", function () {
-    if (state.pollTimer) {
-      clearTimeout(state.pollTimer);
-      state.pollTimer = null;
-    }
     clearFile();
   });
 

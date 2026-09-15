@@ -149,9 +149,9 @@ npx wrangler deployments list          # 查看当前部署
 ## API
 
 - `POST /api/detect`：multipart 上传 `file` + 切分参数 → `{ count, titles[], encoding }`（空标题章不进 `titles`，`count` 只计有标题章）
-- `POST /api/convert`：multipart 上传 → 小文件同步返回 `{ async:false, download, epubName, chapters, encoding }`；大文件返回 `{ async:true, jobId, job }`
-- `GET /api/jobs/:id`：异步任务状态 `{ status: pending|running|done|error, ... }`，`done` 时含 `download`；`running` 超 90s 自动标 error（防 waitUntil 崩溃后前端死循环）
-- `GET /api/download/:id.epub?name=展示名`：产物下载，`id` 必须是服务端生成的 jobId（白名单 `YYYYMMDD-HHMMSS-8hex` 旧格式 / `YYYYMMDD-HHMMSS-32hex` 新格式 / 32 位 hex），非法返回 400；支持 Range 请求返回 206
+- `POST /api/convert`：multipart 上传 → 小文件同步返回 `{ async:false, download, epubName, chapters, encoding }`；大文件返回 `{ async:true, jobId, job }`；失败响应含 `error/code/stage`
+- `GET /api/jobs/:id`：异步任务状态 `{ status: pending|running|done|error, ... }`，`done` 时含 `download`；`error` 时含 `error`，可选 `code`（错误分类）和 `stage`（request/input/convert/storage）；`running` 超 90s 自动标 error（防 waitUntil 崩溃后前端死循环）
+- `GET /api/download/:id.epub?name=展示名`：产物下载，`id` 必须是服务端生成的 jobId（白名单 `YYYYMMDD-HHMMSS-8hex` 旧格式 / `YYYYMMDD-HHMMSS-32hex` 新格式 / 32 位 hex），非法返回 400；支持单区间 Range 请求返回 206，无效 Range 返回 416
 
 表单字段（对齐 Go WebUI）：`title`、`author`、`splitMode`(0正则/1按字数/2整本)、`splitCount`、`fullReg`、`autoMark`、`removeBlank`、`addSpace`、`addSpaceCount`、`lineHeight`、`fontSize`、`marginTop`、`textAlign`、`indent`。**不接受** `configPath` / `enableMobi`。
 

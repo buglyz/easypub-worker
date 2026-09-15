@@ -7,6 +7,19 @@
   var nextRequestId = 1;
   var pending = Object.create(null);
   var localOutputs = Object.create(null);
+  var activeLocalOutputId = "";
+  var localRequestEpoch = 0;
+
+  function clearActiveLocalOutput() {
+    if (!activeLocalOutputId) return;
+    delete localOutputs[activeLocalOutputId];
+    activeLocalOutputId = "";
+  }
+
+  window.easyPubClearLocalOutput = function () {
+    localRequestEpoch += 1;
+    clearActiveLocalOutput();
+  };
 
   function randomId() {
     if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
@@ -106,14 +119,24 @@
       var file = init.body.get("file");
       if (!(file instanceof File)) return null;
       var fields = fieldsFromForm(init.body);
+      var requestEpoch = ++localRequestEpoch;
       return callLocal(action, file, fields).then(function (result) {
+        // 文件已切换或页面已开始新请求时，旧结果只能返回给旧调用方，不能占用当前下载槽位。
+        if (requestEpoch !== localRequestEpoch) {
+          return jsonResponse({ local: true, stale: true });
+        }
         if (action === "detect") return jsonResponse(result);
 
         var id = randomId();
+        clearActiveLocalOutput();
+        activeLocalOutputId = id;
         localOutputs[id] = {
           blob: new Blob([result.epub], { type: "application/epub+zip" }),
         };
-        window.setTimeout(function () { delete localOutputs[id]; }, 30 * 60 * 1000);
+        window.setTimeout(function () {
+          delete localOutputs[id];
+          if (activeLocalOutputId === id) activeLocalOutputId = "";
+        }, 30 * 60 * 1000);
         return jsonResponse({
           async: false,
           local: true,

@@ -4,7 +4,7 @@ import {
   isValidJobId,
   sanitizeDownloadName,
 } from "../lib/names";
-import { getEpub } from "../lib/r2";
+import { getEpub, headEpub } from "../lib/r2";
 import { jsonResponse } from "../lib/form";
 
 /** 解析 HTTP Range 头为 R2 GET 的 range 参数（仅支持 bytes 单区间） */
@@ -13,25 +13,28 @@ type R2Range =
   | { suffix: number };
 
 function parseRange(rangeHeader: string, size?: number): R2Range | null {
-  const m = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+  const m = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/);
   if (!m) return null;
   const start = m[1] || "";
   const end = m[2] || "";
   if (start === "" && end === "") return null;
+  if (size === 0) return null;
   if (start === "") {
     // suffix：取最后 N 字节
     const suffix = parseInt(end, 10);
-    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
     return { suffix };
   }
   const offset = parseInt(start, 10);
-  if (!Number.isFinite(offset) || offset < 0) return null;
+  if (!Number.isSafeInteger(offset) || offset < 0) return null;
   if (size != null && offset >= size) return null;
   if (end === "") return { offset };
   const endN = parseInt(end, 10);
-  if (!Number.isFinite(endN) || endN < offset) return null;
+  if (!Number.isSafeInteger(endN) || endN < offset) return null;
   // Range end inclusive → length = end - offset + 1
-  return { offset, length: endN - offset + 1 };
+  const length = endN - offset + 1;
+  if (!Number.isSafeInteger(length)) return null;
+  return { offset, length };
 }
 
 /** 计算 Content-Range 响应头中的 start/end 字节位置 */
@@ -42,6 +45,16 @@ function computeRangeBounds(range: R2Range, total: number): { start: number; end
   const start = range.offset;
   const end = range.length != null ? Math.min(start + range.length - 1, total - 1) : total - 1;
   return { start, end };
+}
+
+function invalidRangeResponse(total?: number): Response {
+  const headers = new Headers({ "Accept-Ranges": "bytes" });
+  if (total != null) headers.set("Content-Range", `bytes */${total}`);
+  return jsonResponse({ error: "Range 请求无效" }, 416, headers);
+}
+
+function objectBody(obj: R2Object | R2ObjectBody): ReadableStream<Uint8Array> | null {
+  return "body" in obj ? (obj as R2ObjectBody).body : null;
 }
 
 export async function handleDownload(request: Request, env: Env, pathId: string): Promise<Response> {
@@ -62,11 +75,24 @@ export async function handleDownload(request: Request, env: Env, pathId: string)
 
   // Range 请求支持（大 EPUB 弱网分段下载）
   const rangeHeader = request.headers.get("Range") || "";
-  const range = rangeHeader ? parseRange(rangeHeader) : null;
+  let range: R2Range | null = null;
+  let rangeSize: number | undefined;
+  let metadata: R2Object | null = null;
+  if (rangeHeader || request.method === "HEAD") {
+    metadata = await headEpub(env, jobId);
+    if (!metadata) return jsonResponse({ error: "not found" }, 404);
+    rangeSize = metadata.size;
+    if (rangeHeader) {
+      range = parseRange(rangeHeader, rangeSize);
+      if (!range) return invalidRangeResponse(rangeSize);
+    }
+  }
 
-  const obj = range
-    ? await getEpub(env, jobId, range)
-    : await getEpub(env, jobId);
+  const obj = request.method === "HEAD"
+    ? metadata
+    : range
+      ? await getEpub(env, jobId, range)
+      : await getEpub(env, jobId);
   if (!obj) {
     return jsonResponse({ error: "not found" }, 404);
   }
@@ -86,7 +112,7 @@ export async function handleDownload(request: Request, env: Env, pathId: string)
 
   if (range) {
     // 部分内容：计算 Content-Range + 206
-    const total = obj.size ?? 0;
+    const total = rangeSize ?? obj.size ?? 0;
     const { start, end } = computeRangeBounds(range, total);
     headers.set("Content-Range", `bytes ${start}-${end}/${total}`);
     if (obj.size != null) {
@@ -95,7 +121,7 @@ export async function handleDownload(request: Request, env: Env, pathId: string)
     if (request.method === "HEAD") {
       return new Response(null, { status: 206, headers });
     }
-    return new Response(obj.body, { status: 206, headers });
+    return new Response(objectBody(obj), { status: 206, headers });
   }
 
   if (obj.size != null) headers.set("Content-Length", String(obj.size));
@@ -103,5 +129,5 @@ export async function handleDownload(request: Request, env: Env, pathId: string)
   if (request.method === "HEAD") {
     return new Response(null, { status: 200, headers });
   }
-  return new Response(obj.body, { status: 200, headers });
+  return new Response(objectBody(obj), { status: 200, headers });
 }

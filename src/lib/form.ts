@@ -98,7 +98,7 @@ export function jsonResponse(data: unknown, status = 200, extraHeaders?: Headers
   return new Response(JSON.stringify(data), { status, headers });
 }
 
-export type ErrorStage = "request" | "convert" | "storage";
+export type ErrorStage = "request" | "input" | "convert" | "storage";
 
 export interface PublicError {
   code: "INVALID_INPUT" | "RESOURCE_LIMIT" | "STORAGE_ERROR" | "CONVERT_ERROR";
@@ -141,6 +141,10 @@ function storageMessage(message: string): string {
   return `EPUB 已生成，但保存到 R2 失败：${message}`;
 }
 
+function inputMessage(message: string): string {
+  return `后台任务读取输入文件失败：${message}`;
+}
+
 /** 将内部异常转换为可展示的错误，不返回堆栈、密钥或服务器路径。 */
 export function toPublicError(err: unknown, stage: ErrorStage = "request"): PublicError {
   const detail = compactErrorMessage(err);
@@ -153,6 +157,9 @@ export function toPublicError(err: unknown, stage: ErrorStage = "request"): Publ
       message: `Worker 资源不足，转换未完成：${detail}`,
       status: 503,
     };
+  }
+  if (stage === "input") {
+    return { code: "STORAGE_ERROR", message: inputMessage(detail), status: 503 };
   }
   if (stage === "storage") {
     return { code: "STORAGE_ERROR", message: storageMessage(detail), status: 503 };

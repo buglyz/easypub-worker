@@ -144,13 +144,15 @@ export async function handleConvert(
 async function runAsyncJob(env: Env, jobId: string): Promise<void> {
   let meta = await getJob(env, jobId);
   if (!meta) return;
-  meta.status = "running";
-  meta.startedAt = new Date().toISOString();
-  meta.updatedAt = meta.startedAt;
-  await putJob(env, meta);
 
   let stage: ErrorStage = "storage";
   try {
+    meta.status = "running";
+    meta.startedAt = new Date().toISOString();
+    meta.updatedAt = meta.startedAt;
+    await putJob(env, meta);
+
+    stage = "input";
     const upload = await env.BUCKET.get(uploadKey(jobId));
     if (!upload) throw new Error("missing job upload");
     const text = await upload.text();
@@ -193,6 +195,8 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
     if (!meta) return;
     meta.status = "error";
     meta.error = info.message;
+    meta.errorCode = info.code;
+    meta.errorStage = stage;
     meta.updatedAt = new Date().toISOString();
     await putJob(env, meta);
     // 抛出以便触发 ctx.waitUntil 失败日志（Workers 会记为 unhandled rejection）
@@ -219,6 +223,8 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
     if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
       meta.status = "error";
       meta.error = "后台任务超时或异常退出";
+      meta.errorCode = "RESOURCE_LIMIT";
+      meta.errorStage = "convert";
       meta.updatedAt = new Date().toISOString();
       await putJob(env, meta);
     }
@@ -228,6 +234,8 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
     if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
       meta.status = "error";
       meta.error = "后台任务未启动,请重试";
+      meta.errorCode = "CONVERT_ERROR";
+      meta.errorStage = "storage";
       meta.updatedAt = new Date().toISOString();
       await putJob(env, meta);
     }
@@ -250,6 +258,8 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
   }
   if (meta.status === "error") {
     body.error = meta.error || "转换失败";
+    if (meta.errorCode) body.code = meta.errorCode;
+    if (meta.errorStage) body.stage = meta.errorStage;
   }
   return jsonResponse(body);
 }

@@ -17,7 +17,11 @@ function makeCtx() {
   return { ctx, drain: () => Promise.all(pending) };
 }
 
-function makeEnv(store: Map<string, unknown>, overrides: Partial<Record<string, string>> = {}) {
+function makeEnv(
+  store: Map<string, unknown>,
+  overrides: Partial<Record<string, string>> = {},
+  options: { missingUpload?: boolean } = {}
+) {
   return {
     BUCKET: {
       put: async (key: string, value: unknown, opts?: unknown) => {
@@ -25,6 +29,7 @@ function makeEnv(store: Map<string, unknown>, overrides: Partial<Record<string, 
         return {};
       },
       get: async (key: string) => {
+        if (options.missingUpload && key.startsWith("uploads/")) return null;
         const hit = store.get(key);
         if (!hit) return null;
         const { value } = hit as { value: unknown };
@@ -68,6 +73,18 @@ function makeEnv(store: Map<string, unknown>, overrides: Partial<Record<string, 
           };
         }
         return null;
+      },
+      head: async (key: string) => {
+        const hit = store.get(key);
+        if (!hit) return null;
+        const { value } = hit as { value: unknown };
+        const size =
+          typeof value === "string"
+            ? new TextEncoder().encode(value).byteLength
+            : value instanceof Uint8Array
+              ? value.byteLength
+              : 0;
+        return { size };
       },
       delete: async (key: string) => {
         store.delete(key);
@@ -203,6 +220,35 @@ describe("Worker 集成（本地 R2 桩点）", () => {
     expect(job.chapters).toBeGreaterThan(0);
   });
 
+  it("异步任务缺少上传对象时收敛为带阶段的错误", async () => {
+    const store = new Map();
+    const env = makeEnv(store, {}, { missingUpload: true });
+    const { ctx, drain } = makeCtx();
+    const file = new File([makeLargeTxt()], "我的小说.txt", { type: "text/plain" });
+    const res = await worker.fetch(
+      makeMultipartRequest(
+        "https://easypub.test/api/convert",
+        file,
+        { autoMark: "true", removeBlank: "true", title: "", author: "" }
+      ),
+      env,
+      ctx
+    );
+    const data = (await res.json()) as { jobId: string };
+    expect(data.jobId).toBeTruthy();
+
+    await expect(drain()).rejects.toThrow("missing job upload");
+    const jobRes = await worker.fetch(
+      new Request("https://easypub.test/api/jobs/" + data.jobId),
+      env,
+      {} as ExecutionContext
+    );
+    const job = (await jobRes.json()) as { status: string; code?: string; stage?: string };
+    expect(job.status).toBe("error");
+    expect(job.code).toBe("STORAGE_ERROR");
+    expect(job.stage).toBe("input");
+  });
+
   it("download 用合法 id 返回 application/epub+zip，展示名保留主名", async () => {
     const store = new Map();
     const env = makeEnv(store);
@@ -239,6 +285,15 @@ describe("Worker 集成（本地 R2 桩点）", () => {
     const view = new Uint8Array(buf);
     expect(view[0]).toBe(0x50); // P
     expect(view[1]).toBe(0x4b); // K
+
+    const head = await worker.fetch(
+      new Request("https://easypub.test" + convData.download, { method: "HEAD" }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(head.status).toBe(200);
+    expect(head.headers.get("Content-Length")).toBe(String(buf.byteLength));
+    expect((await head.arrayBuffer()).byteLength).toBe(0);
   });
 
   it("download 支持 Range 请求，返回 206", async () => {
@@ -265,6 +320,31 @@ describe("Worker 集成（本地 R2 桩点）", () => {
     expect(dl.status).toBe(206);
     expect(dl.headers.get("Content-Range")).toMatch(/^bytes 0-9\/\d+$/);
     expect(dl.headers.get("Accept-Ranges")).toBe("bytes");
+  });
+
+  it("Range 无效时返回 416，不回退为完整文件", async () => {
+    const store = new Map();
+    const env = makeEnv(store);
+    const file = new File([SAMPLE_TXT], "我的小说.txt", { type: "text/plain" });
+    const conv = await worker.fetch(
+      makeMultipartRequest(
+        "https://easypub.test/api/convert",
+        file,
+        { autoMark: "true", removeBlank: "true", title: "", author: "" }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const convData = (await conv.json()) as { download: string };
+    const invalid = await worker.fetch(
+      new Request("https://easypub.test" + convData.download, {
+        headers: { Range: "bytes=999999-" },
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invalid.status).toBe(416);
+    expect(invalid.headers.get("Content-Range")).toMatch(/^bytes \*\/\d+$/);
   });
 
   it("非法 download id 返回 400（防穿越白名单）", async () => {
