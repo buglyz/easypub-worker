@@ -153,7 +153,7 @@ npx wrangler deployments list          # 查看当前部署
 | 项 | 限制 | 说明 |
 |---|---|---|
 | 上传体积 | 32MB（`MAX_UPLOAD_BYTES`） | Worker 请求体上限约 100MB；前端也做了 32MB 校验 |
-| 同步阈值 | 20MB（`SYNC_MAX_BYTES`） | 超过走异步 job |
+| 同步阈值 | 8MB（`SYNC_MAX_BYTES`） | 超过走异步 job |
 | CPU 时间 | 免费档 10ms / 付费档 30s | 实测 14MB/1593 章同步转换约 1.9s，远低于上限 |
 | 内存 | ~128MB | 转换全程在内存中：读入 → 解码 → 切章 → 打包 |
 | 产物保留 | 24h | R2 lifecycle 规则，超时自动删除 |

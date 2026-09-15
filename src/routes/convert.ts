@@ -15,6 +15,7 @@ import {
   putEpub,
   putJob,
   putTextUpload,
+  uploadKey,
   type JobMeta,
 } from "../lib/r2";
 import { defaultCss } from "../lib/css";
@@ -34,8 +35,8 @@ export async function handleConvert(
 
   // 入口预校验已在 parseMultipart 中完成（Content-Length + file.size）
   const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 32 << 20);
-  // dev/prod 默认值对齐 wrangler.toml 的 SYNC_MAX_BYTES=20MB，避免 dev 行为漂移
-  const syncMax = numEnv(env.SYNC_MAX_BYTES, 20 << 20);
+  // 大文本会同时占用上传内容、章节数组和 ZIP 产物内存，默认 8MB 走异步降低峰值。
+  const syncMax = numEnv(env.SYNC_MAX_BYTES, 8 << 20);
 
   let up;
   try {
@@ -77,8 +78,8 @@ export async function handleConvert(
     );
     await putJob(env, meta);
 
-    // 把已解码 text 透传进 waitUntil 闭包，避免异步路径再读一次 upload 对象
-    ctx.waitUntil(runAsyncJob(env, jobId, up.text));
+    // 不把完整 text 放进闭包；任务开始后从 R2 读取，避免请求和转换同时持有全文。
+    ctx.waitUntil(runAsyncJob(env, jobId));
 
     return jsonResponse({
       async: true,
@@ -137,10 +138,10 @@ export async function handleConvert(
 }
 
 /**
- * 异步任务执行。text 已从 convert handler 透传过来，避免再读一次 R2 upload 对象。
+ * 异步任务执行。任务开始后从 R2 读取上传文本，避免请求闭包长期持有全文。
  * 失败/成功统一清理 uploads 与 opts.json（产物 outputs/ 保留 24h 由 lifecycle 清）。
  */
-async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void> {
+async function runAsyncJob(env: Env, jobId: string): Promise<void> {
   let meta = await getJob(env, jobId);
   if (!meta) return;
   meta.status = "running";
@@ -150,6 +151,9 @@ async function runAsyncJob(env: Env, jobId: string, text: string): Promise<void>
 
   let stage: ErrorStage = "storage";
   try {
+    const upload = await env.BUCKET.get(uploadKey(jobId));
+    if (!upload) throw new Error("missing job upload");
+    const text = await upload.text();
     const optsObj = await env.BUCKET.get(optsKey(jobId));
     if (!optsObj) throw new Error("missing job opts");
 

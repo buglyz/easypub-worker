@@ -23,10 +23,9 @@ binding = "BUCKET"
 bucket_name = "easypub"
 
 [vars]
-# 同步转换阈值（字节）。超过则走异步 job（waitUntil）+ 前端轮询 /api/jobs/:id
-# 实测（Node 24 本机）：14MB/1593 章 UTF-8 → EPUB 约 1.9s；20MB 阈值内同步稳定，
-# 更大文件或保守场景建议走异步，避免 Worker 付费 CPU 30s 上限。
-SYNC_MAX_BYTES = "20971520"
+# 同步转换阈值（字节）。超过则走异步 job（waitUntil）+ 前端轮询 /api/jobs/:id。
+# EPUB 构建会同时保留正文、章节结构和 ZIP 产物，默认 8MB 以降低 Worker 内存峰值。
+SYNC_MAX_BYTES = "8388608"
 # 上传硬上限（字节），默认 32MB；Worker 请求体受平台限制（约 100MB）
 MAX_UPLOAD_BYTES = "33554432"
 # 产物保留提示（秒），实际过期请在 R2 配置 lifecycle 规则
