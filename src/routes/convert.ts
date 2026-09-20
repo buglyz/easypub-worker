@@ -34,7 +34,7 @@ export async function handleConvert(
   }
 
   // 入口预校验已在 parseMultipart 中完成（Content-Length + file.size）
-  const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 32 << 20);
+  const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 100 << 20);
   // 大文本会同时占用上传内容、章节数组和 ZIP 产物内存，默认 8MB 走异步降低峰值。
   const syncMax = numEnv(env.SYNC_MAX_BYTES, 8 << 20);
 

@@ -7,7 +7,7 @@ export async function handleDetect(request: Request, env: Env): Promise<Response
   if (request.method !== "POST") {
     return jsonResponse({ error: "method not allowed" }, 405);
   }
-  const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 32 << 20);
+  const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 100 << 20);
   try {
     const up = await parseMultipart(request, maxUpload);
     const chapters = parseTxt(up.text, up.txtOpt);

@@ -161,13 +161,15 @@ npx wrangler deployments list          # 查看当前部署
 
 | 项 | 限制 | 说明 |
 |---|---|---|
-| 上传体积 | 32MB（`MAX_UPLOAD_BYTES`） | Worker 请求体上限约 100MB；前端也做了 32MB 校验 |
+| 上传体积 | ~100MB（`MAX_UPLOAD_BYTES`，已推到平台请求体物理上限） | Worker 请求体上限约 100MB；前端校准一致 |
 | 同步阈值 | 8MB（`SYNC_MAX_BYTES`） | 超过走异步 job |
 | CPU 时间 | 免费档 10ms / 付费档 30s | 实测 14MB/1593 章同步转换约 1.9s，远低于上限 |
 | 内存 | ~128MB | 转换全程在内存中：读入 → 解码 → 切章 → 打包 |
 | 产物保留 | 24h | R2 lifecycle 规则，超时自动删除 |
 
-超过 32MB 的 TXT 请先拆分。异步任务在 Workers 免费档下 `waitUntil` 最长约 30s，超大型文件建议：
+上传体积已去掉应用层 32MB 的自设限制、对齐平台请求体上限（~100MB）。剩下的硬约束是 **Workers 平台的内存（~128MB）与 CPU 时间**，代码层面无法消除：超巨型 TXT 在内存转换阶段（读入→解码→切章→打包）可能触发 `RESOURCE_LIMIT`，`form.ts` 会自动降级为 503 提示而非崩溃丢任务。
+
+异步任务在 Workers 免费档下 `waitUntil` 最长约 30s，超大型文件建议：
 
 1. 提高 Workers 付费计划；
 2. 或改为 Queues / Workflows 做后台转换（本项目当前用 `waitUntil` 已覆盖实测 14MB 场景，作为扩展方向记录在 `src/routes/convert.ts`）。

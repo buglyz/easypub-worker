@@ -6,7 +6,7 @@
   "use strict";
 
   // Constants
-  var MAX_UPLOAD_BYTES = 32 << 20; // 32 MB
+  var MAX_UPLOAD_BYTES = 100 << 20; // 100 MB（对齐 Workers 平台请求体物理上限）
   var POLL_MAX_TICKS = 150; // 5 min timeout
   var FILE_EXT_RE = /\.(txt|utf8|gbk|utf-8)$/i;
 

@@ -26,8 +26,10 @@ bucket_name = "easypub"
 # 同步转换阈值（字节）。超过则走异步 job（waitUntil）+ 前端轮询 /api/jobs/:id。
 # EPUB 构建会同时保留正文、章节结构和 ZIP 产物，默认 8MB 以降低 Worker 内存峰值。
 SYNC_MAX_BYTES = "8388608"
-# 上传硬上限（字节），默认 32MB；Worker 请求体受平台限制（约 100MB）
-MAX_UPLOAD_BYTES = "33554432"
+# 上传硬上限（字节），已推到平台请求体物理上限 ~100MB（104857600）。
+# 注意：本地/线上仍受 Workers 内存(~128MB)与 CPU(付费 30s)约束，超巨型文件
+# 在内存转换阶段可能触发 RESOURCE_LIMIT（form.ts 会优雅降级，不丢任务）。
+MAX_UPLOAD_BYTES = "104857600"
 # 产物保留提示（秒），实际过期请在 R2 配置 lifecycle 规则
 OUTPUT_TTL_SECONDS = "86400"
 # 可选：设置后要求请求头 X-EasyPub-Token 匹配。
