@@ -5,8 +5,11 @@
 (function () {
   "use strict";
 
-  // Constants
-  var MAX_UPLOAD_BYTES = 100 << 20; // 100 MB（对齐 Workers 平台请求体物理上限）
+  // 前端冒烟护栏（仅防多 GB 级误选拖垮浏览器标签页/内存）。
+  // 本地转换是主链路，不受应用层大小限制，真实边界 = 浏览器内存；
+  // 只有回退到 Cloudflare 时才受平台 100MB 请求体上限约束，而那是服务器
+  // (parseMultipart env.MAX_UPLOAD_BYTES)自行拦截的，前端无需预判。
+  var MAX_UPLOAD_BYTES = 1 << 30; // 1 GB：几乎不构成实用限制的护栏
   var POLL_MAX_TICKS = 150; // 5 min timeout
   var FILE_EXT_RE = /\.(txt|utf8|gbk|utf-8)$/i;
 
@@ -305,7 +308,7 @@
     if (!file) return;
 
     if (file.size > MAX_UPLOAD_BYTES) {
-      showError("文件不能超过 " + formatSize(MAX_UPLOAD_BYTES) + "（当前 " + formatSize(file.size) + "）");
+      showError("文件过大（" + formatSize(file.size) + "）。本地转换无大小上限，但作为护栏限定 " + formatSize(MAX_UPLOAD_BYTES) + "；若需回退云端则受 ~100MB 平台限制。");
       return;
     }
     if (!FILE_EXT_RE.test(file.name)) {
