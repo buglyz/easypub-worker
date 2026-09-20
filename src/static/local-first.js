@@ -58,7 +58,12 @@
       var task = pending[data.id];
       if (!task) return;
       if (data.type === "progress") {
-        if (task.progress) task.progress(data.stage);
+        if (task.progress) task.progress(data.stage, data.percent);
+        // 全局进度钩子：本地转换细分进度（decode/parse/render/build/zip/done + %）。
+        // app.js 注册 easyPubOnLocalProgress 更新进度条与文案；未注册则忽略。
+        if (window.easyPubOnLocalProgress) {
+          window.easyPubOnLocalProgress(data.stage, data.percent);
+        }
         return;
       }
       delete pending[data.id];
@@ -81,23 +86,23 @@
 
   function callLocal(action, file, fields) {
     var worker = getWorker();
-    return file.arrayBuffer().then(function (bytes) {
-      return new Promise(function (resolve, reject) {
-        var id = String(nextRequestId++);
-        pending[id] = { resolve: resolve, reject: reject };
-        try {
-          worker.postMessage({
-            id: id,
-            action: action,
-            bytes: bytes,
-            fileName: file.name,
-            fields: fields,
-          }, [bytes]);
-        } catch (err) {
-          delete pending[id];
-          reject(err);
-        }
-      });
+    return new Promise(function (resolve, reject) {
+      var id = String(nextRequestId++);
+      pending[id] = { resolve: resolve, reject: reject };
+      try {
+        // File 直接结构化克隆进 Worker，由 Worker 线程读取并转换：
+        // 主线程不再分配整份大 ArrayBuffer，选大文件/检测/转换时页面不卡顿。
+        worker.postMessage({
+          id: id,
+          action: action,
+          file: file,
+          fileName: file && file.name,
+          fields: fields,
+        });
+      } catch (err) {
+        delete pending[id];
+        reject(err);
+      }
     });
   }
 

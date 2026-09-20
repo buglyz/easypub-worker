@@ -561,6 +561,29 @@
     tick();
   }
 
+  /* ---------- Local Conversion Progress ---------- */
+
+  // 本地 Worker 分阶段进度(带 %)。decode/parse 阶段保持 convertBook 起始的 35% 底座,
+  // 用 max 保证条单调不回退;detect 等无进度条场景(progressWrap 隐藏)直接忽略。
+  window.easyPubOnLocalProgress = function (stage, percent) {
+    if (!els.progressWrap || els.progressWrap.hidden) return;
+    var text = "正在转换…";
+    switch (stage) {
+      case "decode": text = "正在识别编码…"; break;
+      case "parse": text = "正在切分章节…"; break;
+      case "render": text = "正在排版章节…"; break;
+      case "build": text = "正在组装 EPUB…"; break;
+      case "zip": text = "正在压缩生成…"; break;
+      case "done": text = "生成完成…"; break;
+    }
+    if (els.progress) els.progress.textContent = text;
+    if (els.progressBarFill) {
+      var cur = parseFloat(els.progressBarFill.style.width) || 0;
+      var next = Math.max(cur, Number(percent) || 5);
+      els.progressBarFill.style.width = Math.min(100, next) + "%";
+    }
+  };
+
   function convertBook() {
     if (!state.file || state.converting) return;
     var operationId = state.operationId;
