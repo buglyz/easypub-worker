@@ -23,4 +23,4 @@ jobs:
       - name: Verify local-worker bundle is up to date
         run: |
           npm run build:local
-          git diff --exit-code src/static/local-worker.js
+          git diff --ignore-cr-at-eol --exit-code src/static/local-worker.js

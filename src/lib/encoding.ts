@@ -57,12 +57,54 @@ function tryDecodeLabel(bytes: Uint8Array, label: string): string | null {
   }
 }
 
+/**
+ * 检测字节流是否包含 GB18030 独有的 4 字节扩展序列（0x81-0xFE, 0x30-0x39, 0x81-0xFE, 0x30-0x39）。
+ * WHATWG 规范中 TextDecoder("gbk") 是 gb18030 的别名，不同运行环境（如 Node 22 vs Node 24 / 浏览器）
+ * 对 4 字节序列的处理存在差异；通过步进扫描可在所有运行时稳定区分 GBK 与 GB18030。
+ */
+function hasGb18030FourByteSeq(bytes: Uint8Array): boolean {
+  const len = bytes.length;
+  for (let i = 0; i < len; ) {
+    const b0 = bytes[i];
+    if (b0 < 0x80) {
+      i += 1;
+      continue;
+    }
+    if (b0 >= 0x81 && b0 <= 0xfe && i + 1 < len) {
+      const b1 = bytes[i + 1];
+      if (b1 >= 0x40 && b1 <= 0xfe && b1 !== 0x7f) {
+        i += 2;
+        continue;
+      }
+      if (
+        b1 >= 0x30 &&
+        b1 <= 0x39 &&
+        i + 3 < len &&
+        bytes[i + 2] >= 0x81 &&
+        bytes[i + 2] <= 0xfe &&
+        bytes[i + 3] >= 0x30 &&
+        bytes[i + 3] <= 0x39
+      ) {
+        return true;
+      }
+    }
+    i += 1;
+  }
+  return false;
+}
+
 function tryCandidates(bytes: Uint8Array): { text: string; enc: string } | null {
-  const candidates: [string, string][] = [
-    ["gbk", "GBK"],
-    ["gb18030", "GB18030"],
-    ["big5", "Big5"],
-  ];
+  const isGb18030Ext = hasGb18030FourByteSeq(bytes);
+  const candidates: [string, string][] = isGb18030Ext
+    ? [
+        ["gb18030", "GB18030"],
+        ["big5", "Big5"],
+      ]
+    : [
+        ["gbk", "GBK"],
+        ["gb18030", "GB18030"],
+        ["big5", "Big5"],
+      ];
   for (const [label, tag] of candidates) {
     const s = tryDecodeLabel(bytes, label);
     if (s != null) return { text: s, enc: tag };
