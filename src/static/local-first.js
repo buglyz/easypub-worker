@@ -1,7 +1,8 @@
 (function () {
   "use strict";
 
-  // 本地 Worker 失败时只回退这一条请求，原 fetch、表单和鉴权头全部保留。
+  // 本地 Worker 失败时仅对运行环境/不支持类故障回退 Cloudflare；
+  // 输入校验类错误（如正则语法错、封面格式非法）直接返回 400，避免大文件无效上传。
   var nativeFetch = window.fetch.bind(window);
   var localWorker = null;
   var nextRequestId = 1;
@@ -21,13 +22,23 @@
     clearActiveLocalOutput();
   };
 
+  window.easyPubClearLocalCache = function () {
+    if (localWorker) {
+      try {
+        localWorker.postMessage({ action: "clearCache" });
+      } catch (e) {}
+    }
+  };
+
   function randomId() {
     if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
     var bytes = new Uint8Array(16);
     window.crypto.getRandomValues(bytes);
-    return Array.prototype.map.call(bytes, function (b) {
-      return b.toString(16).padStart(2, "0");
-    }).join("");
+    return Array.prototype.map
+      .call(bytes, function (b) {
+        return b.toString(16).padStart(2, "0");
+      })
+      .join("");
   }
 
   function jsonResponse(data, status) {
@@ -39,6 +50,7 @@
 
   function workerFailure(message) {
     var err = new Error(message || "本地转换不可用");
+    err.code = "LOCAL_ERROR";
     Object.keys(pending).forEach(function (id) {
       pending[id].reject(err);
       delete pending[id];
@@ -49,7 +61,9 @@
 
   function getWorker() {
     if (!window.Worker || !window.File || !window.Blob) {
-      throw new Error("当前浏览器不支持本地转换");
+      var err = new Error("当前浏览器不支持本地转换");
+      err.code = "UNSUPPORTED";
+      throw err;
     }
     if (localWorker) return localWorker;
     localWorker = new Worker("/local-worker.js");
@@ -59,16 +73,19 @@
       if (!task) return;
       if (data.type === "progress") {
         if (task.progress) task.progress(data.stage, data.percent);
-        // 全局进度钩子：本地转换细分进度（decode/parse/render/build/zip/done + %）。
-        // app.js 注册 easyPubOnLocalProgress 更新进度条与文案；未注册则忽略。
         if (window.easyPubOnLocalProgress) {
           window.easyPubOnLocalProgress(data.stage, data.percent);
         }
         return;
       }
       delete pending[data.id];
-      if (data.ok) task.resolve(data.result);
-      else task.reject(new Error(data.error || "本地转换失败"));
+      if (data.ok) {
+        task.resolve(data.result);
+      } else {
+        var err = new Error(data.error || "本地转换失败");
+        err.code = data.code || "LOCAL_ERROR";
+        task.reject(err);
+      }
     };
     localWorker.onerror = function (event) {
       workerFailure(event.message || "本地转换线程异常");
@@ -84,18 +101,17 @@
     return fields;
   }
 
-  function callLocal(action, file, fields) {
+  function callLocal(action, file, cover, fields) {
     var worker = getWorker();
     return new Promise(function (resolve, reject) {
       var id = String(nextRequestId++);
       pending[id] = { resolve: resolve, reject: reject };
       try {
-        // File 直接结构化克隆进 Worker，由 Worker 线程读取并转换：
-        // 主线程不再分配整份大 ArrayBuffer，选大文件/检测/转换时页面不卡顿。
         worker.postMessage({
           id: id,
           action: action,
           file: file,
+          cover: cover || null,
           fileName: file && file.name,
           fields: fields,
         });
@@ -123,10 +139,12 @@
     try {
       var file = init.body.get("file");
       if (!(file instanceof File)) return null;
+      var coverEntry = init.body.get("cover");
+      var cover = coverEntry instanceof Blob && coverEntry.size > 0 ? coverEntry : null;
       var fields = fieldsFromForm(init.body);
       var requestEpoch = ++localRequestEpoch;
-      return callLocal(action, file, fields).then(function (result) {
-        // 文件已切换或页面已开始新请求时，旧结果只能返回给旧调用方，不能占用当前下载槽位。
+
+      return callLocal(action, file, cover, fields).then(function (result) {
         if (requestEpoch !== localRequestEpoch) {
           return jsonResponse({ local: true, stale: true });
         }
@@ -145,7 +163,8 @@
         return jsonResponse({
           async: false,
           local: true,
-          download: "/api/local-download/" + id + ".epub?name=" + encodeURIComponent(result.epubName),
+          download:
+            "/api/local-download/" + id + ".epub?name=" + encodeURIComponent(result.epubName),
           epub: id + ".epub",
           epubName: result.epubName,
           chapters: result.chapters,
@@ -168,13 +187,26 @@
       if (localDownload) return Promise.resolve(localDownload);
     }
     if (method === "POST" && url.origin === window.location.origin) {
-      var action = url.pathname === "/api/detect" ? "detect" :
-        url.pathname === "/api/convert" ? "convert" : "";
+      var action =
+        url.pathname === "/api/detect"
+          ? "detect"
+          : url.pathname === "/api/convert"
+            ? "convert"
+            : "";
       if (action) {
         var localRequest = interceptConversion(url, init, action);
-        if (localRequest) return localRequest.catch(function () {
-          return nativeFetch(input, init);
-        });
+        if (localRequest) {
+          return localRequest.catch(function (err) {
+            // 输入错误直接本地返回 400，无需无意义上传云端二次报错
+            if (err && err.code === "INVALID_INPUT") {
+              return jsonResponse(
+                { error: err.message || "输入参数有误", code: "INVALID_INPUT", local: true },
+                400
+              );
+            }
+            return nativeFetch(input, init);
+          });
+        }
       }
     }
     return nativeFetch(input, init);

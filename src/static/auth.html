@@ -3,27 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#1b4332">
-<title>EasyPub · 身份验证</title>
+<meta name="theme-color" content="#1f4d3a">
+<title>EasyPub · 访问验证</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="auth-body">
   <div class="auth-card">
     <div class="auth-brand">
-      <span class="brand-icon" aria-hidden="true">EP</span>
-      <strong>EasyPub</strong>
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+        </svg>
+      </span>
+      <span class="brand-title">EasyPub</span>
     </div>
-    <h1 class="auth-title">请输入访问令牌</h1>
-    <p class="auth-sub">本服务已启用安全访问控制，请输入管理员分配的 Access Token。</p>
+    <h1 class="auth-title">输入访问令牌</h1>
+    <p class="auth-sub">当前实例已开启访问控制，请输入管理员配置的 Access Token</p>
     <form id="authForm" class="auth-form" autocomplete="off">
       <input type="password" id="tokenInput" class="input"
-             placeholder="粘贴 Token 密钥…" autocomplete="current-password" required>
+             placeholder="输入或粘贴 Access Token" autocomplete="current-password" required>
       <button type="submit" class="btn btn-primary btn-lg" id="authBtn" style="width: 100%;">进入工作台</button>
     </form>
     <p class="auth-error" id="authError" role="alert" hidden></p>
     <p class="auth-hint">
-      Token 将仅在当前浏览器 Session 会话中有效。<br>
-      亦可通过 URL 参数 <code>?token=YOUR_TOKEN</code> 快速验证。
+      令牌仅保存在当前标签页会话中，关闭页面后自动清除。
     </p>
   </div>
   <script src="/auth.js"></script>

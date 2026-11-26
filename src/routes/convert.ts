@@ -1,27 +1,31 @@
 import type { Env } from "../env";
 import { numEnv } from "../env";
 import {
-  parseMultipart,
+  parseMultipartRaw,
   jsonResponse,
   toPublicError,
   type ErrorStage,
 } from "../lib/form";
+import { detectAndDecode } from "../lib/encoding";
+import { parseCoverBytes, type CoverImage } from "../lib/cover";
 import { runConvert } from "../lib/convert-core";
 import { displayNameFromUpload, newJobId } from "../lib/names";
 import {
   cleanupTempObjects,
+  coverUploadKey,
   getJob,
   optsKey,
+  putCoverUpload,
   putEpub,
   putJob,
-  putTextUpload,
+  putRawUpload,
   uploadKey,
   type JobMeta,
 } from "../lib/r2";
 import { defaultCss } from "../lib/css";
 import { optionsFromForm } from "../lib/txt-parse";
 
-/** 异步任务 stale 检测：running 超过该秒数视为崩溃（Workers waitUntil 上限 ~30s，留容错） */
+/** 异步任务 stale 检测：running/pending 超过该秒数视为崩溃（Workers waitUntil 上限 ~30s，留容错） */
 const ASYNC_TIMEOUT_SECONDS = 90;
 
 export async function handleConvert(
@@ -33,52 +37,53 @@ export async function handleConvert(
     return jsonResponse({ error: "method not allowed" }, 405);
   }
 
-  // 入口预校验已在 parseMultipart 中完成（Content-Length + file.size）
   const maxUpload = numEnv(env.MAX_UPLOAD_BYTES, 100 << 20);
-  // 大文本会同时占用上传内容、章节数组和 ZIP 产物内存，默认 8MB 走异步降低峰值。
   const syncMax = numEnv(env.SYNC_MAX_BYTES, 8 << 20);
 
-  let up;
+  let raw;
   try {
-    up = await parseMultipart(request, maxUpload);
+    raw = await parseMultipartRaw(request, maxUpload);
   } catch (err) {
     const info = toPublicError(err, "request");
     return jsonResponse({ error: info.message, code: info.code }, info.status);
   }
 
   const jobId = newJobId();
-  const epubName = displayNameFromUpload(up.fileName, ".epub");
+  const epubName = displayNameFromUpload(raw.fileName, ".epub");
   const now = new Date().toISOString();
 
-  // 大文件：异步 job（waitUntil 后台转换）
-  if (up.rawBytes > syncMax) {
+  // 大文件：先写原始字节到 R2，不在此处同步全量解码，降低入口请求内存/CPU 峰值
+  if (raw.rawBytes > syncMax) {
     const meta: JobMeta = {
       jobId,
       status: "pending",
-      originalName: up.fileName,
+      originalName: raw.fileName,
       epubName,
-      encoding: up.encoding,
       createdAt: now,
       updatedAt: now,
       async: true,
     };
-    await putTextUpload(env, jobId, up.text, up.fileName);
-    // 把转换参数也存 job opts 扩展对象（与 job meta 分开存）
-    await env.BUCKET.put(
-      optsKey(jobId),
-      JSON.stringify({
-        title: up.title,
-        author: up.author,
-        txtOpt: up.txtOpt,
-        cssOpt: up.cssOpt,
-        encoding: up.encoding,
-        fileName: up.fileName,
-      }),
-      { httpMetadata: { contentType: "application/json" } }
-    );
+    const uploads: Promise<unknown>[] = [
+      putRawUpload(env, jobId, raw.rawData, raw.fileName),
+      env.BUCKET.put(
+        optsKey(jobId),
+        JSON.stringify({
+          title: raw.title,
+          author: raw.author,
+          txtOpt: raw.txtOpt,
+          cssOpt: raw.cssOpt,
+          fileName: raw.fileName,
+          hasCover: Boolean(raw.coverImage),
+        }),
+        { httpMetadata: { contentType: "application/json" } }
+      ),
+    ];
+    if (raw.coverImage) {
+      uploads.push(putCoverUpload(env, jobId, raw.coverImage));
+    }
+    await Promise.all(uploads);
     await putJob(env, meta);
 
-    // 不把完整 text 放进闭包；任务开始后从 R2 读取，避免请求和转换同时持有全文。
     ctx.waitUntil(runAsyncJob(env, jobId));
 
     return jsonResponse({
@@ -87,29 +92,36 @@ export async function handleConvert(
       status: "pending",
       job: `/api/jobs/${jobId}`,
       epubName,
-      encoding: up.encoding,
       message: "文件较大，已创建异步任务，请轮询 /api/jobs/:id",
     });
   }
 
-  // 小文件：同步
+  // 小文件：同步解码与转换
+  let decoded: { text: string; encoding: string };
+  try {
+    decoded = detectAndDecode(raw.rawData);
+  } catch {
+    return jsonResponse({ error: "编码识别失败", code: "INVALID_INPUT" }, 400);
+  }
+
   let stage: ErrorStage = "convert";
   try {
     const result = runConvert({
-      text: up.text,
-      fileName: up.fileName,
-      title: up.title,
-      author: up.author,
-      encoding: up.encoding,
-      txtOpt: up.txtOpt,
-      cssOpt: up.cssOpt,
+      text: decoded.text,
+      fileName: raw.fileName,
+      title: raw.title,
+      author: raw.author,
+      encoding: decoded.encoding,
+      txtOpt: raw.txtOpt,
+      cssOpt: raw.cssOpt,
+      coverImage: raw.coverImage,
     });
     stage = "storage";
     await putEpub(env, jobId, result.epub, epubName);
     const done: JobMeta = {
       jobId,
       status: "done",
-      originalName: up.fileName,
+      originalName: raw.fileName,
       epubName,
       encoding: result.encoding,
       chapters: result.chapters,
@@ -119,8 +131,7 @@ export async function handleConvert(
     };
     await putJob(env, done);
 
-    const download =
-      `/api/download/${jobId}.epub?name=` + encodeURIComponent(epubName);
+    const download = `/api/download/${jobId}.epub?name=` + encodeURIComponent(epubName);
     return jsonResponse({
       async: false,
       download,
@@ -138,8 +149,8 @@ export async function handleConvert(
 }
 
 /**
- * 异步任务执行。任务开始后从 R2 读取上传文本，避免请求闭包长期持有全文。
- * 失败/成功统一清理 uploads 与 opts.json（产物 outputs/ 保留 24h 由 lifecycle 清）。
+ * 异步任务执行：从 R2 读取原始字节 → 编码识别 → 转换 → 写入产物。
+ * 无论成功/失败均清理临时上传、封面与 opts。
  */
 async function runAsyncJob(env: Env, jobId: string): Promise<void> {
   let meta = await getJob(env, jobId);
@@ -155,7 +166,6 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
     stage = "input";
     const upload = await env.BUCKET.get(uploadKey(jobId));
     if (!upload) throw new Error("missing job upload");
-    const text = await upload.text();
     const optsObj = await env.BUCKET.get(optsKey(jobId));
     if (!optsObj) throw new Error("missing job opts");
 
@@ -164,19 +174,32 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
       author: string;
       txtOpt: ReturnType<typeof optionsFromForm>;
       cssOpt: ReturnType<typeof defaultCss>;
-      encoding: string;
+      encoding?: string;
       fileName: string;
+      hasCover?: boolean;
     };
 
+    const rawBytes = new Uint8Array(await upload.arrayBuffer());
     stage = "convert";
+    const decoded = detectAndDecode(rawBytes);
+
+    let coverImage: CoverImage | undefined;
+    if (opts.hasCover) {
+      const coverObj = await env.BUCKET.get(coverUploadKey(jobId));
+      if (coverObj) {
+        coverImage = parseCoverBytes(new Uint8Array(await coverObj.arrayBuffer()));
+      }
+    }
+
     const result = runConvert({
-      text,
+      text: decoded.text,
       fileName: opts.fileName,
       title: opts.title,
       author: opts.author,
-      encoding: opts.encoding,
+      encoding: decoded.encoding,
       txtOpt: opts.txtOpt,
       cssOpt: opts.cssOpt,
+      coverImage,
     });
 
     stage = "storage";
@@ -199,10 +222,8 @@ async function runAsyncJob(env: Env, jobId: string): Promise<void> {
     meta.errorStage = stage;
     meta.updatedAt = new Date().toISOString();
     await putJob(env, meta);
-    // 抛出以便触发 ctx.waitUntil 失败日志（Workers 会记为 unhandled rejection）
     throw err;
   } finally {
-    // 无论成功/失败都清掉临时上传与 opts，减小 R2 占用
     await cleanupTempObjects(env, jobId);
   }
 }
@@ -216,8 +237,6 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
     return jsonResponse({ error: "job not found" }, 404);
   }
 
-  // stale 检测：如果处于 running 状态但 startedAt 距今已超过 ASYNC_TIMEOUT_SECONDS，
-  // 视为 waitUntil 崩溃/超时，自动标记为 error，防止前端轮询永不收敛
   if (meta.status === "running" && meta.startedAt) {
     const ageSeconds = (Date.now() - new Date(meta.startedAt).getTime()) / 1000;
     if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
@@ -229,7 +248,6 @@ export async function handleJob(request: Request, env: Env, jobId: string): Prom
       await putJob(env, meta);
     }
   } else if (meta.status === "pending" && meta.createdAt) {
-    // pending 卡住(waitUntil 未启动/启动前崩溃)同样 stale 标记 error,防前端无限轮询
     const ageSeconds = (Date.now() - new Date(meta.createdAt).getTime()) / 1000;
     if (ageSeconds > ASYNC_TIMEOUT_SECONDS) {
       meta.status = "error";

@@ -1,10 +1,10 @@
 import { detectAndDecode } from "./encoding";
+import { parseCoverBytes, type CoverImage } from "./cover";
 import { optionsFromForm, type TxtOptions } from "./txt-parse";
 import { cssOptionsFromFields, type CssOptions } from "./css";
 
-export interface UploadParse {
-  text: string;
-  encoding: string;
+export interface RawUploadParse {
+  rawData: Uint8Array;
   fileName: string;
   rawBytes: number;
   txtOpt: TxtOptions;
@@ -12,23 +12,33 @@ export interface UploadParse {
   title: string;
   author: string;
   fields: Record<string, string>;
+  coverImage?: CoverImage;
 }
 
-export async function parseMultipart(
+export interface UploadParse extends RawUploadParse {
+  text: string;
+  encoding: string;
+}
+
+/**
+ * 解析 multipart 上传（仅读原始字节与可选封面图，不解码全文），
+ * 供大文件异步任务直接落 R2、把编码探测延后至后台任务执行。
+ */
+export async function parseMultipartRaw(
   request: Request,
   maxUploadBytes: number
-): Promise<UploadParse> {
+): Promise<RawUploadParse> {
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.includes("multipart/form-data")) {
     throw new Error("需要 multipart/form-data 上传");
   }
 
-  // 入口预校验：声称的 Content-Length 直接超限就 413，避免被巨大 chunked / 虚标
-  // 小 CL 但实流式大 body 把 Workers 内存吃满
+  // 入口预校验：声称的 Content-Length 直接超限就 400/413，避免巨大请求把 Workers 内存吃满
   const clHeader = request.headers.get("content-length");
   if (clHeader) {
     const cl = parseInt(clHeader, 10);
-    if (Number.isFinite(cl) && cl > maxUploadBytes) {
+    // 预留封面与表单字段少量额外开销（+6MB）
+    if (Number.isFinite(cl) && cl > maxUploadBytes + (6 << 20)) {
       throw new Error(`文件超过 ${maxUploadBytes >> 20} MB 限制`);
     }
   }
@@ -62,12 +72,13 @@ export async function parseMultipart(
     throw new Error(`文件超过 ${maxUploadBytes >> 20} MB 限制`);
   }
 
-  const bytes = new Uint8Array(ab);
-  let decoded: { text: string; encoding: string };
-  try {
-    decoded = detectAndDecode(bytes);
-  } catch {
-    throw new Error("编码识别失败");
+  const rawData = new Uint8Array(ab);
+
+  let coverImage: CoverImage | undefined;
+  const coverEntry = form.get("cover");
+  if (coverEntry && coverEntry instanceof Blob && coverEntry.size > 0) {
+    const coverBytes = new Uint8Array(await coverEntry.arrayBuffer());
+    coverImage = parseCoverBytes(coverBytes);
   }
 
   let fileName = "upload.txt";
@@ -80,15 +91,33 @@ export async function parseMultipart(
   const cssOpt = cssOptionsFromFields(fields);
 
   return {
-    text: decoded.text,
-    encoding: decoded.encoding,
+    rawData,
     fileName,
-    rawBytes: bytes.length,
+    rawBytes: rawData.byteLength,
     txtOpt,
     cssOpt,
     title: (fields.title || "").trim(),
     author: (fields.author || "").trim(),
     fields,
+    coverImage,
+  };
+}
+
+export async function parseMultipart(
+  request: Request,
+  maxUploadBytes: number
+): Promise<UploadParse> {
+  const raw = await parseMultipartRaw(request, maxUploadBytes);
+  let decoded: { text: string; encoding: string };
+  try {
+    decoded = detectAndDecode(raw.rawData);
+  } catch {
+    throw new Error("编码识别失败");
+  }
+  return {
+    ...raw,
+    text: decoded.text,
+    encoding: decoded.encoding,
   };
 }
 
@@ -111,13 +140,12 @@ function compactErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const message = raw.replace(/\s+/g, " ").trim();
   if (!message) return "未知错误";
-  // 只返回 message，不返回 stack；同时隐藏常见本地路径，避免泄露运行环境信息。
   const withoutPath = message.replace(/(?:[A-Za-z]:\\|\\\\)[^ ]+/g, "[内部路径]");
   return withoutPath.length > 240 ? withoutPath.slice(0, 240) + "…" : withoutPath;
 }
 
-function isInputError(message: string): boolean {
-  return /multipart|解析上传|缺少文件字段|文件超过|编码|无法识别编码|正则编译失败|P3 编译失败|invalid SplitMode/i.test(
+export function isInputError(message: string): boolean {
+  return /multipart|解析上传|缺少文件字段|文件超过|封面图片|编码|无法识别编码|正则编译失败|P3 编译失败|invalid SplitMode/i.test(
     message
   );
 }
@@ -175,17 +203,11 @@ export function securityHeaders(h: Headers): void {
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "DENY");
   h.set("Referrer-Policy", "no-referrer");
-  h.set(
-    "Strict-Transport-Security",
-    "max-age=63072000; includeSubDomains; preload"
-  );
+  h.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  // 注意:style-src 需 'unsafe-inline' 以兼容前端内联样式与 JS 动态样式
-  // (页面大量 style="..." 属性 / element.style.xxx / 动态注入 <style>,
-  //  见 index.html / auth.html / app.js)。script-src 保持 'self',XSS 主防线不变。
   h.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
   );
 }
 

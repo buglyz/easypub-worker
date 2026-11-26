@@ -1,5 +1,8 @@
 /** 对齐 Go util.DetectAndDecode：UTF-8/UTF-16/GBK/GB18030/Big5 */
 
+/** 候选编码快筛样本大小（64 KB），避免大文件在失败编码上重复全量解码 */
+const SAMPLE_PROBE_BYTES = 64 * 1024;
+
 function hasPrefix(b: Uint8Array, prefix: number[]): boolean {
   if (b.length < prefix.length) return false;
   for (let i = 0; i < prefix.length; i++) {
@@ -8,7 +11,34 @@ function hasPrefix(b: Uint8Array, prefix: number[]): boolean {
   return true;
 }
 
+function tryDecodeUtf8(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function probeDecodeSample(bytes: Uint8Array, label: string): boolean {
+  if (bytes.length <= SAMPLE_PROBE_BYTES) return true;
+  const sample = bytes.subarray(0, SAMPLE_PROBE_BYTES);
+  try {
+    const dec = new TextDecoder(label, { fatal: true, ignoreBOM: false });
+    const s = dec.decode(sample, { stream: true });
+    return !s.includes("\uFFFD");
+  } catch {
+    try {
+      const dec = new TextDecoder(label, { fatal: false, ignoreBOM: false });
+      const s = dec.decode(sample, { stream: true });
+      return !s.includes("\uFFFD");
+    } catch {
+      return false;
+    }
+  }
+}
+
 function tryDecodeLabel(bytes: Uint8Array, label: string): string | null {
+  if (!probeDecodeSample(bytes, label)) return null;
   const opts = { fatal: true, ignoreBOM: false } as const;
   try {
     const dec = new TextDecoder(label, opts);
@@ -24,15 +54,6 @@ function tryDecodeLabel(bytes: Uint8Array, label: string): string | null {
     } catch {
       return null;
     }
-  }
-}
-
-function isValidUtf8(bytes: Uint8Array): boolean {
-  try {
-    new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -64,15 +85,17 @@ export function detectAndDecode(bytes: Uint8Array): { text: string; encoding: st
   }
   if (hasPrefix(bytes, [0xef, 0xbb, 0xbf])) {
     const rest = bytes.subarray(3);
-    if (!isValidUtf8(rest)) {
+    const utf8 = tryDecodeUtf8(rest);
+    if (utf8 == null) {
       const alt = tryCandidates(rest);
       if (alt) return { text: alt.text, encoding: alt.enc };
       throw new Error("UTF-8 BOM 后内容非法且候选编码均失败");
     }
-    return { text: new TextDecoder("utf-8", { fatal: false, ignoreBOM: false }).decode(rest), encoding: "UTF-8" };
+    return { text: utf8, encoding: "UTF-8" };
   }
-  if (isValidUtf8(bytes)) {
-    return { text: new TextDecoder("utf-8", { fatal: false, ignoreBOM: false }).decode(bytes), encoding: "UTF-8" };
+  const utf8 = tryDecodeUtf8(bytes);
+  if (utf8 != null) {
+    return { text: utf8, encoding: "UTF-8" };
   }
   const alt = tryCandidates(bytes);
   if (alt) return { text: alt.text, encoding: alt.enc };
@@ -90,6 +113,15 @@ export function escapeText(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&#34;")
     .replace(/'/g, "&#39;");
+}
+
+export function unescapeText(s: string): string {
+  return s
+    .replace(/&#39;/g, "'")
+    .replace(/&#34;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
 }
 
 export function escapeForXmlAttr(s: string): string {

@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { numEnv } from "../env";
 import { parseMultipart, jsonResponse, safeErr } from "../lib/form";
-import { parseTxt, titledChapters } from "../lib/txt-parse";
+import { extractSamplePreview, parseTxt, titledChapters } from "../lib/txt-parse";
 
 export async function handleDetect(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") {
@@ -12,9 +12,11 @@ export async function handleDetect(request: Request, env: Env): Promise<Response
     const up = await parseMultipart(request, maxUpload);
     const chapters = parseTxt(up.text, up.txtOpt);
     const titles = titledChapters(chapters);
+    const preview = extractSamplePreview(chapters, 2);
     return jsonResponse({
       count: titles.length,
       titles,
+      preview,
       encoding: up.encoding.toLowerCase() === "utf-8" ? "utf-8" : up.encoding,
     });
   } catch (err) {

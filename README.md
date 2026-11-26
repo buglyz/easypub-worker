@@ -2,12 +2,12 @@
 
 TXT → EPUB 的 Cloudflare Workers 部署形态，与 [Go 版 easypub](https://github.com/buglyz/easypub)（`master` 分支）功能对齐，**仅生成 EPUB，无 MOBI / kindlegen**。
 
-- 前端：拖拽上传 → 识别章节 → 排版 → 转换下载（带登录页鉴权）
-- 核心逻辑：TypeScript 移植 Go 版 `internal/txt`（章节识别）、`internal/epub`（EPUB 2.0 打包）、`internal/css`（中文排版样式）
+- 前端：拖拽上传 → 识别章节 → 封面与排版 → 转换下载（支持自定义封面图与自动生成文字封面、阅读器纸白/暖纸/深墨三色预览、排版持久化、登录页鉴权）
+- 核心逻辑：TypeScript 移植 Go 版 `internal/txt`（章节识别 + ReDoS 防护）、`internal/epub`（单遍流式 EPUB 2.0 打包）、`internal/css`（中文排版样式）
 - 存储：R2 存临时 TXT 与生成的 EPUB，产物 24h 过期（bucket lifecycle）
-- 本地优先：浏览器 Web Worker 使用本机 CPU 转换，失败或浏览器不支持时自动回退 Cloudflare
-- 大文件：小文件同步转换；超过阈值走异步 job（`waitUntil` 后台转换 + 前端轮询 `/api/jobs/:id`）
-- 安全：可选 `ACCESS_TOKEN` 鉴权 + 网页登录页 + 128bit jobId 防枚举 + 严格 CSP/HSTS 安全头
+- 本地优先：浏览器 Web Worker 缓存解码结果并用本机 CPU 转换，仅在运行环境不支持或异常时自动回退 Cloudflare
+- 大文件：小文件同步转换；超过阈值直写原始字节进 R2 并走异步 job（`waitUntil` 后台解码转换 + 前端轮询 `/api/jobs/:id`）
+- 安全：可选 `ACCESS_TOKEN` 鉴权 + 网页登录页（防开放重定向）+ 128bit jobId 防枚举 + 严格 CSP/HSTS 安全头
 
 ## 目录结构
 
@@ -28,8 +28,10 @@ easypub-worker/
 │   │   └── download.ts  # GET /api/download/:id 产物下载（jobId 白名单 + Range）
 │   ├── lib/
 │   │   ├── encoding.ts  # 编码探测：UTF-8(BOM)/UTF-16(BE/LE)/GBK/GB18030/Big5
-│   │   ├── txt-parse.ts # 章节识别（AutoMark 默认正则、防误切、按字数、整本一章）
-│   │   ├── epub-build.ts # EPUB 2.0 zip（mimetype store、BOM+CRLF 对齐 Go）
+│   │   ├── cover.ts     # 封面图片魔数校验（JPG/PNG/WebP，上限 5MB）
+│   │   ├── txt-parse.ts # 章节识别（AutoMark 默认正则、防误切、ReDoS 防护、按字数、整本一章）
+│   │   ├── zip-writer.ts # 单遍流式标准 ZIP 写入器（固定 mtime，无 Data Descriptor）
+│   │   ├── epub-build.ts # EPUB 2.0 打包（mimetype store、BOM+CRLF 对齐 Go、可选封面图）
 │   │   ├── css.ts       # 中文排版 style.css（行高/字号/段前距/对齐/缩进）
 │   │   ├── convert-core.ts # 转换编排
 │   │   ├── names.ts     # 下载展示名净化 + jobId 白名单（128bit 熵）
@@ -38,10 +40,11 @@ easypub-worker/
 │   └── static/          # 前端
 │       ├── index.html   # 主工作台
 │       ├── auth.html    # 登录页（启用 ACCESS_TOKEN 时使用）
-│       ├── app.js       # 主页逻辑（含 401 自动跳登录）
+│       ├── app.js       # 主页逻辑（含 401 自动跳登录、排版持久化、真实正文预览）
+│       ├── cover-studio.js # 封面工作台（Canvas 自动文字封面 + 自定义图片上传）
 │       ├── local-first.js # 本地优先 fetch 适配与 Cloudflare 回退
 │       ├── local-worker.js # 浏览器本地转换 bundle（自动生成）
-│       ├── auth.js      # 登录页逻辑（验证 → sessionStorage → 跳回）
+│       ├── auth.js      # 登录页逻辑（验证 → sessionStorage → 同源安全跳回）
 │       ├── style.css    # 样式
 │       └── _headers     # 静态资源安全头
 └── test/                # vitest 单元 + 集成测试（本地 R2 桩点）

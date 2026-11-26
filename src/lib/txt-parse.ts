@@ -1,6 +1,6 @@
 /** 移植 internal/txt/txt.go 的章节识别逻辑 */
 
-import { escapeText, normalizeEOL } from "./encoding";
+import { escapeText, normalizeEOL, unescapeText } from "./encoding";
 
 export interface Chapter {
   title: string;
@@ -74,8 +74,68 @@ function compileSafe(src: string, flags = ""): RegExp | null {
   }
 }
 
+/**
+ * 基础 ReDoS 静态检测：拦截含嵌套不确定量词的分组（如 (a+)+、(.*)*、(a|aa)+），
+ * 防止恶意/误写自定义正则在 Workers 或主线程触发指数级回溯。
+ */
+export function isUnsafeRegex(src: string): boolean {
+  let inClass = false;
+  let escaped = false;
+  const groupStack: { hasQuantifier: boolean }[] = [];
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      continue;
+    }
+    if (ch === "(") {
+      groupStack.push({ hasQuantifier: false });
+      continue;
+    }
+    if (ch === ")") {
+      const top = groupStack.pop();
+      if (!top) continue;
+      const next = src[i + 1];
+      const quantified = next === "+" || next === "*" || next === "{";
+      if (quantified && top.hasQuantifier) return true;
+      if ((quantified || top.hasQuantifier) && groupStack.length > 0) {
+        groupStack[groupStack.length - 1].hasQuantifier = true;
+      }
+      continue;
+    }
+    if ((ch === "+" || ch === "*" || ch === "{") && groupStack.length > 0) {
+      // 忽略紧跟在量词后的懒惰修饰符 ?，只标记真正的重复量词
+      if (ch === "{") {
+        const rest = src.slice(i);
+        if (/^\{\d+,\s*\d*\}/.test(rest)) {
+          groupStack[groupStack.length - 1].hasQuantifier = true;
+        }
+      } else {
+        groupStack[groupStack.length - 1].hasQuantifier = true;
+      }
+    }
+  }
+  return false;
+}
+
 /** 编译用户提供的正则；失败时抛错以对齐 Go buildPatterns 的显式报错 */
 function compileStrict(src: string, label: string, flags = ""): RegExp {
+  if (isUnsafeRegex(src)) {
+    throw new Error(`${label}正则编译失败：包含嵌套重复量词，存在性能风险`);
+  }
   try {
     return new RegExp(src, flags);
   } catch (e) {
@@ -236,13 +296,23 @@ export function parseTxt(text: string, opt: TxtOptions): Chapter[] {
   }
 
   const pats = buildPatterns(opt);
+  const isDefaultOnly =
+    !opt.fullReg &&
+    !opt.simpleRegP1 &&
+    !opt.simpleRegP3 &&
+    opt.additionalReg.length === 0;
   const marks: Seg[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trim = line.trim();
+    // 默认章节正则最长不超过 ~85 字，跳过空行与明显正文长行，扫描性能提升 5~10 倍
+    if (isDefaultOnly && (trim.length === 0 || trim.length > 100)) {
+      continue;
+    }
+    const sameAsTrim = line === trim;
     for (const p of pats) {
       p.lastIndex = 0;
-      if (p.test(line) || p.test(trim)) {
+      if (p.test(line) || (!sameAsTrim && p.test(trim))) {
         marks.push({ title: trim, start: i });
         break;
       }
@@ -283,6 +353,26 @@ export function titledChapters(chapters: Chapter[]): string[] {
     if (t) titles.push(t);
   }
   return titles;
+}
+
+/** 提取用于前端阅读器预览的真实样本段落（纯文本，非 HTML） */
+export function extractSamplePreview(
+  chapters: Chapter[],
+  maxParagraphs = 2
+): { title: string; paragraphs: string[] } | null {
+  for (const c of chapters) {
+    const paragraphs: string[] = [];
+    for (const p of c.body) {
+      const plain = unescapeText(p).trim();
+      if (!plain) continue;
+      paragraphs.push(plain.length > 220 ? plain.slice(0, 220) + "…" : plain);
+      if (paragraphs.length >= maxParagraphs) break;
+    }
+    if (paragraphs.length > 0) {
+      return { title: c.title.trim(), paragraphs };
+    }
+  }
+  return null;
 }
 
 /** 从 form 字段构建 options（对齐 webui buildTxtOverrides） */

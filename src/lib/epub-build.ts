@@ -1,8 +1,10 @@
 /** EPUB 2.0 生成，对齐 internal/epub */
 
-import { zipSync, strToU8 } from "fflate";
-import type { Zippable, ZipOptions } from "fflate";
+import { strToU8 } from "fflate";
+import { StreamingZipWriter } from "./zip-writer";
 import type { Chapter } from "./txt-parse";
+import type { CoverImage } from "./cover";
+import { coverExtFromMediaType } from "./cover";
 import { escapeForXmlAttr, escapeText } from "./encoding";
 
 export interface Book {
@@ -13,7 +15,11 @@ export interface Book {
   uid: string;
   css: string;
   chapters: Chapter[];
+  /** 可选封面图片；未传时保持与 Go 版纯文字封面完全一致 */
+  coverImage?: CoverImage;
 }
+
+export type BuildProgressCallback = (percent: number, stage: "build" | "zip") => void;
 
 const HTML_DOCTYPE = `<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -51,122 +57,137 @@ function fmt(tpl: string, ...args: string[]): string {
   return tpl.replace(/%s/g, () => args[i++] ?? "");
 }
 
+function coverHref(b: Book): string | null {
+  if (!b.coverImage) return null;
+  return `cover.${coverExtFromMediaType(b.coverImage.mediaType)}`;
+}
+
 function coverHtml(b: Book): string {
+  const imgHref = coverHref(b);
+  if (imgHref) {
+    const body = `<div class="centeredimage" style="margin:0;padding:0;text-align:center;">\n<img src="${imgHref}" alt="${escapeForXmlAttr(b.title)}" style="max-width:100%;max-height:100%;height:auto;"/>\n</div>`;
+    return fmt(HTML_DOCTYPE, "Cover", body);
+  }
   const body = `<div>\n<h1 class="booktitle">${escapeText(b.title)}</h1>\n<h3 class="bookauthor">${escapeText(b.author)}</h3>\n</div>`;
   return fmt(HTML_DOCTYPE, "Cover", body);
 }
 
 function bookTocHtml(b: Book): string {
-  let dl = "<dl>\n";
+  const parts: string[] = ["<dl>\n"];
   for (let i = 0; i < b.chapters.length; i++) {
     const c = b.chapters[i];
     if (!c.title.trim()) continue;
-    dl += `<dt class="tocl2"><a href="chapter${i}.html">${escapeText(c.title)}</a></dt>\n`;
+    parts.push(`<dt class="tocl2"><a href="chapter${i}.html">${escapeText(c.title)}</a></dt>\n`);
   }
-  dl += "</dl>\n";
-  const body = `<h2 class="titletoc">\n目录\n</h2>\n<div class="toc">\n${dl}</div>`;
+  parts.push("</dl>\n");
+  const body = `<h2 class="titletoc">\n目录\n</h2>\n<div class="toc">\n${parts.join("")}</div>`;
   return fmt(HTML_DOCTYPE, "Table Of Contents", body);
 }
 
 function chapterHtml(b: Book, idx: number): string {
   const c = b.chapters[idx];
-  let body = "";
+  const parts: string[] = [];
   if (c.title.trim()) {
-    body += `<h2 id="title" class="titlel2std">${escapeText(c.title)}</h2>\n`;
+    parts.push(`<h2 id="title" class="titlel2std">${escapeText(c.title)}</h2>\n`);
   }
   for (const p of c.body) {
     if (!p.trim()) {
-      body += `<p class="a"></p>\n`;
-      continue;
+      parts.push(`<p class="a"></p>\n`);
+    } else {
+      parts.push(`<p class="a">${p}</p>\n`);
     }
-    body += `<p class="a">${p}</p>\n`;
   }
-  body = body.replace(/\n$/, "");
+  const body = parts.join("").replace(/\n$/, "");
   return fmt(HTML_DOCTYPE, `chapter ${idx} - 0`, body);
 }
 
 function opfXml(b: Book): string {
-  let sb = "";
-  sb += `<?xml version="1.0" encoding="utf-8" standalone="no"?>\n\n`;
-  sb += `<package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">\n`;
-  sb += `<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">\n`;
-  sb += `<dc:identifier id="bookid">${escapeForXmlAttr(b.uid)}</dc:identifier>\n`;
-  sb += `<dc:title>${escapeText(b.title)}</dc:title>\n`;
-  sb += `<dc:date>${escapeText(b.date)}</dc:date>\n`;
-  sb += `<dc:rights>Created with EasyPub v1.50</dc:rights>\n`;
-  sb += `<dc:language>${escapeText(b.language)}</dc:language>\n`;
-  if (b.author) sb += `<dc:creator>${escapeText(b.author)}</dc:creator>\n`;
-  sb += `</metadata>\n`;
-  sb += `<manifest>\n`;
-  sb += `<item id="ncxtoc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>\n`;
-  sb += `<item id="htmltoc"  href="book-toc.html" media-type="application/xhtml+xml"/>\n`;
-  sb += `<item id="css" href="style.css" media-type="text/css"/>\n`;
-  sb += `<item id="cover" href="cover.html" media-type="application/xhtml+xml"/>\n`;
-  for (let i = 0; i < b.chapters.length; i++) {
-    sb += `<item id="chapter${i}" href="chapter${i}.html" media-type="application/xhtml+xml"/>\n`;
+  const imgHref = coverHref(b);
+  const parts: string[] = [];
+  parts.push(`<?xml version="1.0" encoding="utf-8" standalone="no"?>\n\n`);
+  parts.push(`<package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">\n`);
+  parts.push(`<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">\n`);
+  parts.push(`<dc:identifier id="bookid">${escapeForXmlAttr(b.uid)}</dc:identifier>\n`);
+  parts.push(`<dc:title>${escapeText(b.title)}</dc:title>\n`);
+  parts.push(`<dc:date>${escapeText(b.date)}</dc:date>\n`);
+  parts.push(`<dc:rights>Created with EasyPub v1.50</dc:rights>\n`);
+  parts.push(`<dc:language>${escapeText(b.language)}</dc:language>\n`);
+  if (b.author) parts.push(`<dc:creator>${escapeText(b.author)}</dc:creator>\n`);
+  if (imgHref) parts.push(`<meta name="cover" content="cover-image"/>\n`);
+  parts.push(`</metadata>\n`);
+  parts.push(`<manifest>\n`);
+  parts.push(`<item id="ncxtoc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>\n`);
+  parts.push(`<item id="htmltoc"  href="book-toc.html" media-type="application/xhtml+xml"/>\n`);
+  parts.push(`<item id="css" href="style.css" media-type="text/css"/>\n`);
+  parts.push(`<item id="cover" href="cover.html" media-type="application/xhtml+xml"/>\n`);
+  if (imgHref && b.coverImage) {
+    parts.push(`<item id="cover-image" href="${imgHref}" media-type="${b.coverImage.mediaType}"/>\n`);
   }
-  sb += `</manifest>\n`;
-  sb += `<spine toc="ncxtoc">\n`;
-  sb += `<itemref idref="cover" linear="no"/>\n`;
-  sb += `<itemref idref="htmltoc" linear="yes"/>\n`;
   for (let i = 0; i < b.chapters.length; i++) {
-    sb += `<itemref idref="chapter${i}" linear="yes"/>\n`;
+    parts.push(`<item id="chapter${i}" href="chapter${i}.html" media-type="application/xhtml+xml"/>\n`);
   }
-  sb += `</spine>\n`;
-  sb += `<guide>\n`;
-  sb += `<reference href="cover.html" type="cover" title="Cover"/>\n`;
-  sb += `<reference href="book-toc.html" type="toc" title="Table Of Contents"/>\n`;
+  parts.push(`</manifest>\n`);
+  parts.push(`<spine toc="ncxtoc">\n`);
+  parts.push(`<itemref idref="cover" linear="no"/>\n`);
+  parts.push(`<itemref idref="htmltoc" linear="yes"/>\n`);
+  for (let i = 0; i < b.chapters.length; i++) {
+    parts.push(`<itemref idref="chapter${i}" linear="yes"/>\n`);
+  }
+  parts.push(`</spine>\n`);
+  parts.push(`<guide>\n`);
+  parts.push(`<reference href="cover.html" type="cover" title="Cover"/>\n`);
+  parts.push(`<reference href="book-toc.html" type="toc" title="Table Of Contents"/>\n`);
   if (b.chapters.length > 0) {
-    sb += `<reference href="chapter0.html" type="text" title="Beginning"/>\n`;
+    parts.push(`<reference href="chapter0.html" type="text" title="Beginning"/>\n`);
   }
-  sb += `</guide>\n`;
-  sb += `</package>\n`;
-  return sb;
+  parts.push(`</guide>\n`);
+  parts.push(`</package>\n`);
+  return parts.join("");
 }
 
 function ncxXml(b: Book): string {
-  let sb = "";
-  sb += `<?xml version="1.0" encoding="utf-8" standalone="no"?>\n`;
-  sb += `<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n`;
-  sb += `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\n`;
-  sb += `<head>\n`;
-  sb += `<meta name="cover" content="cover"/>\n`;
-  sb += `<meta name="dtb:uid" content="${escapeForXmlAttr(b.uid)}" />\n`;
-  sb += `<meta name="dtb:depth" content="1"/>\n`;
-  sb += `<meta name="dtb:generator" content="EasyPub v1.50"/>\n`;
-  sb += `<meta name="dtb:totalPageCount" content="0"/>\n`;
-  sb += `<meta name="dtb:maxPageNumber" content="0"/>\n`;
-  sb += `</head>\n\n`;
-  sb += `<docTitle>\n`;
-  sb += `<text>${escapeText(b.title)}</text>\n`;
-  sb += `</docTitle>\n`;
-  sb += `<docAuthor>\n`;
-  sb += `<text>${escapeText(b.author)}</text>\n`;
-  sb += `</docAuthor>\n\n`;
-  sb += `<navMap>\n`;
+  const parts: string[] = [];
+  parts.push(`<?xml version="1.0" encoding="utf-8" standalone="no"?>\n`);
+  parts.push(`<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n`);
+  parts.push(`<ncx xmlns="http://www.daisy.org/2005/ncx/" version="2005-1">\n`);
+  parts.push(`<head>\n`);
+  parts.push(`<meta name="cover" content="cover"/>\n`);
+  parts.push(`<meta name="dtb:uid" content="${escapeForXmlAttr(b.uid)}" />\n`);
+  parts.push(`<meta name="dtb:depth" content="1"/>\n`);
+  parts.push(`<meta name="dtb:generator" content="EasyPub v1.50"/>\n`);
+  parts.push(`<meta name="dtb:totalPageCount" content="0"/>\n`);
+  parts.push(`<meta name="dtb:maxPageNumber" content="0"/>\n`);
+  parts.push(`</head>\n\n`);
+  parts.push(`<docTitle>\n`);
+  parts.push(`<text>${escapeText(b.title)}</text>\n`);
+  parts.push(`</docTitle>\n`);
+  parts.push(`<docAuthor>\n`);
+  parts.push(`<text>${escapeText(b.author)}</text>\n`);
+  parts.push(`</docAuthor>\n\n`);
+  parts.push(`<navMap>\n`);
   let playOrder = 1;
-  sb += `<navPoint id="cover" playOrder="${playOrder}">\n`;
-  sb += `<navLabel><text>封面</text></navLabel>\n`;
-  sb += `<content src="cover.html"/>\n`;
-  sb += `</navPoint>\n\n`;
+  parts.push(`<navPoint id="cover" playOrder="${playOrder}">\n`);
+  parts.push(`<navLabel><text>封面</text></navLabel>\n`);
+  parts.push(`<content src="cover.html"/>\n`);
+  parts.push(`</navPoint>\n\n`);
   playOrder++;
-  sb += `<navPoint id="htmltoc" playOrder="${playOrder}">\n`;
-  sb += `<navLabel><text>目录</text></navLabel>\n`;
-  sb += `<content src="book-toc.html"/>\n`;
-  sb += `</navPoint>\n\n`;
+  parts.push(`<navPoint id="htmltoc" playOrder="${playOrder}">\n`);
+  parts.push(`<navLabel><text>目录</text></navLabel>\n`);
+  parts.push(`<content src="book-toc.html"/>\n`);
+  parts.push(`</navPoint>\n\n`);
   playOrder++;
   for (let i = 0; i < b.chapters.length; i++) {
     const c = b.chapters[i];
     if (!c.title.trim()) continue;
-    sb += `<navPoint id="chapter${i}" playOrder="${playOrder}">\n`;
-    sb += `<navLabel><text>${escapeText(c.title)}</text></navLabel>\n`;
-    sb += `<content src="chapter${i}.html"/>\n`;
-    sb += `</navPoint>\n\n`;
+    parts.push(`<navPoint id="chapter${i}" playOrder="${playOrder}">\n`);
+    parts.push(`<navLabel><text>${escapeText(c.title)}</text></navLabel>\n`);
+    parts.push(`<content src="chapter${i}.html"/>\n`);
+    parts.push(`</navPoint>\n\n`);
     playOrder++;
   }
-  sb += `</navMap>\n`;
-  sb += `</ncx>\n`;
-  return sb;
+  parts.push(`</navMap>\n`);
+  parts.push(`</ncx>\n`);
+  return parts.join("");
 }
 
 function toCrlf(s: string): string {
@@ -176,7 +197,6 @@ function toCrlf(s: string): string {
 function withBom(s: string): Uint8Array {
   const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
   const body = strToU8(toCrlf(s));
-  // 防御：如 s 已带 UTF-8 BOM，不再追加（对齐 Go if !bytes.HasPrefix(content, bom)）
   if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) {
     return body;
   }
@@ -186,11 +206,9 @@ function withBom(s: string): Uint8Array {
   return out;
 }
 
-function u8(s: string): Uint8Array {
-  return strToU8(s);
-}
-
-export function ensureBook(partial: Partial<Book> & { title: string; chapters: Chapter[]; css: string }): Book {
+export function ensureBook(
+  partial: Partial<Book> & { title: string; chapters: Chapter[]; css: string }
+): Book {
   return {
     title: partial.title,
     author: partial.author ?? "",
@@ -199,49 +217,62 @@ export function ensureBook(partial: Partial<Book> & { title: string; chapters: C
     uid: partial.uid || "easypub-" + randomId(4),
     css: partial.css,
     chapters: partial.chapters,
+    coverImage: partial.coverImage,
   };
 }
 
-/** 生成 EPUB zip 字节（mimetype 第一项 store，全部条目固定 mtime 保证字节确定性） */
-export function buildEpub(bookIn: Partial<Book> & { title: string; chapters: Chapter[]; css: string }): Uint8Array {
+/**
+ * 流式逐章构建 EPUB zip 字节：
+ * - mimetype 置顶且 store（level 0）
+ * - 所有条目固定 mtime 为 1980-01-01 UTC 保证字节确定性
+ * - 逐章压缩写入并立即释放未压缩 XHTML 缓冲，大幅降低大文件内存峰值
+ */
+export function buildEpub(
+  bookIn: Partial<Book> & { title: string; chapters: Chapter[]; css: string },
+  onProgress?: BuildProgressCallback
+): Uint8Array {
   const book = ensureBook(bookIn);
+  const zip = new StreamingZipWriter();
 
-  // fflate zipSync 的 Zippable：每个条目 [bytes, ZipOptions]
-  // mtime 固定为 1980-01-01 UTC（ZIP DOS time 起始年），保证同输入产出字节级一致
-  // 对齐 Go fixedTime = time.Unix(0,0).UTC() 的"确定性"目标，但用 ZIP 合法最小时间
-  // mimetype 必须 level:0 (store) 且为第一项；其他条目走默认 level:6 (deflate)
-  const fixedTime: Date = new Date("1980-01-01T00:00:00Z");
-  const fixedOpts: ZipOptions = { mtime: fixedTime };
-  const mimetypeOpts: ZipOptions = { level: 0, mtime: fixedTime };
-  const files: Zippable = {};
-
-  files["mimetype"] = [u8("application/epub+zip"), mimetypeOpts];
-  files["META-INF/container.xml"] = [u8(toCrlf(CONTAINER_XML)), fixedOpts];
-  files["OEBPS/style.css"] = [u8(toCrlf(book.css)), fixedOpts];
-  files["OEBPS/cover.html"] = [withBom(coverHtml(book)), fixedOpts];
-  files["OEBPS/book-toc.html"] = [withBom(bookTocHtml(book)), fixedOpts];
-  for (let i = 0; i < book.chapters.length; i++) {
-    files[`OEBPS/chapter${i}.html`] = [withBom(chapterHtml(book, i)), fixedOpts];
+  zip.add("mimetype", strToU8("application/epub+zip"), false);
+  zip.add("META-INF/container.xml", strToU8(toCrlf(CONTAINER_XML)), true);
+  zip.add("OEBPS/style.css", strToU8(toCrlf(book.css)), true);
+  zip.add("OEBPS/cover.html", withBom(coverHtml(book)), true);
+  const imgHref = coverHref(book);
+  if (imgHref && book.coverImage) {
+    // JPG/PNG/WebP 本身已压缩，store 直存省去无效 deflate CPU 开销
+    zip.add(`OEBPS/${imgHref}`, book.coverImage.bytes, false);
   }
-  files["OEBPS/content.opf"] = [withBom(opfXml(book)), fixedOpts];
-  files["OEBPS/toc.ncx"] = [withBom(ncxXml(book)), fixedOpts];
+  zip.add("OEBPS/book-toc.html", withBom(bookTocHtml(book)), true);
 
-  // fflate zipSync 对对象键顺序：现代 JS 字符串键按插入序
-  return zipSync(files, { level: 6 });
+  const totalChapters = book.chapters.length;
+  const progressStep = Math.max(1, Math.floor(totalChapters / 25));
+  for (let i = 0; i < totalChapters; i++) {
+    zip.add(`OEBPS/chapter${i}.html`, withBom(chapterHtml(book, i)), true);
+    if (onProgress && (i % progressStep === 0 || i === totalChapters - 1)) {
+      const pct = 45 + Math.round(((i + 1) / totalChapters) * 45);
+      onProgress(pct, "zip");
+    }
+  }
+
+  zip.add("OEBPS/content.opf", withBom(opfXml(book)), true);
+  zip.add("OEBPS/toc.ncx", withBom(ncxXml(book)), true);
+
+  if (onProgress) onProgress(95, "zip");
+  return zip.finish();
 }
 
-/** 推断书名：首行非空或文件名 */
+/** 推断书名：仅扫描前 8KB / 前 30 行，避免对大文本全量 split 产生巨额内存峰值 */
 export function inferTitle(text: string, fileName: string): string {
-  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const head = text.length > 8192 ? text.slice(0, 8192) : text;
+  const lines = head.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   for (const line of lines.slice(0, 30)) {
     const t = line.trim();
     if (!t) continue;
-    // 「书名：X」或「Title: X」前缀
     const prefix = t.match(/^(?:书名|Title)\s*[:：]\s*(.*)$/i);
     if (prefix) {
       const v = prefix[1].trim();
       if (v) return v;
-      // 前缀后无内容，原行整体作为书名兜底（与 Go 行为对齐）
       return t;
     }
   }
@@ -252,17 +283,17 @@ export function inferTitle(text: string, fileName: string): string {
 
 /** 列出 epub 内关键路径（测试用） */
 export function listEpubPaths(epubBytes: Uint8Array): string[] {
-  // 简单解析 local file headers
   const names: string[] = [];
   let i = 0;
   const view = epubBytes;
   while (i + 30 < view.length) {
     if (view[i] !== 0x50 || view[i + 1] !== 0x4b) break;
-    if (view[i + 2] === 0x01 && view[i + 3] === 0x02) break; // central dir
+    if (view[i + 2] === 0x01 && view[i + 3] === 0x02) break;
     if (view[i + 2] !== 0x03 || view[i + 3] !== 0x04) break;
     const nameLen = view[i + 26] | (view[i + 27] << 8);
     const extraLen = view[i + 28] | (view[i + 29] << 8);
-    const compSize = view[i + 18] | (view[i + 19] << 8) | (view[i + 20] << 16) | (view[i + 21] << 24);
+    const compSize =
+      (view[i + 18] | (view[i + 19] << 8) | (view[i + 20] << 16) | (view[i + 21] << 24)) >>> 0;
     const nameBytes = view.subarray(i + 30, i + 30 + nameLen);
     names.push(new TextDecoder("utf-8", { fatal: false, ignoreBOM: false }).decode(nameBytes));
     i += 30 + nameLen + extraLen + compSize;
